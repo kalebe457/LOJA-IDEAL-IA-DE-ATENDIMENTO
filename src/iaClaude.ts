@@ -1024,10 +1024,16 @@ export class IAClaude implements IA {
      * Mesmo que o Claude retorne prazo como
      * "Não informado", o sistema reconhece
      * "6/10" como prazo.
+     *
+     * Um pedido explícito de atendimento humano
+     * NÃO é resposta da etapa pendente.
      */
+    const pedidoHumano = pediuHumanoExplicitamente(mensagem);
+
     if (
       !novoAtendimento &&
       etapaAnterior &&
+      !pedidoHumano &&
       !clienteNaoSabeOuNaoQuerInformar(mensagem)
     ) {
       const respostaDireta = extrairRespostaDireta(etapaAnterior, mensagem);
@@ -1062,9 +1068,9 @@ export class IAClaude implements IA {
 
     /*
      * Situações especiais.
+     *
+     * pedidoHumano já foi detectado acima.
      */
-    const pedidoHumano = pediuHumanoExplicitamente(mensagem);
-
     const risco = assuntoDeRisco(mensagem);
 
     /*
