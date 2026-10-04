@@ -12,6 +12,15 @@ import { IAClaude } from "./iaClaude.js";
 
 import type { IA } from "./ia.js";
 
+import {
+  ehChatMeta,
+  normalizarMensagensMeta,
+  processarPayloadMeta,
+  verificarAssinaturaMeta,
+  verificarDesafioMeta,
+  type MetaWebhookPayload,
+} from "./metaWebhook.js";
+
 import type { Cliente, ResultadoIA } from "./tipos.js";
 
 /*
@@ -141,7 +150,7 @@ const conversas = new Map<string, Conversa>();
  */
 const resumosPendentes = new Map<string, Conversa>();
 
-type OpenWAEvent = {
+export type OpenWAEvent = {
   event?: string;
 
   timestamp?: string;
@@ -682,6 +691,19 @@ async function enviarComRetentativas(
   texto: string,
   tentativas = 3,
 ): Promise<boolean> {
+  /*
+   * Conversas da Meta nunca são enviadas pelo OpenWA.
+   *
+   * O envio pela Cloud API ainda não foi implementado.
+   */
+  if (ehChatMeta(chatId)) {
+    console.log(
+      `[Meta] resposta não enviada (envio pela Cloud API ainda não implementado): ${chatId} | ${texto}`,
+    );
+
+    return false;
+  }
+
   for (let i = 1; i <= tentativas; i++) {
     try {
       await enviarMensagemOpenWA(chatId, texto);
@@ -1229,7 +1251,19 @@ async function processarMensagemRecebida(payload: OpenWAEvent): Promise<void> {
      * o resumo vai para o grupo.
      */
     if (resultado.status === "HUMANO") {
-      await enviarResumoComRetentativas(conversa);
+      /*
+       * Resumo da Meta fica só no log.
+       *
+       * Nunca vai para o grupo do OpenWA
+       * e nunca fica pendente para retry.
+       */
+      if (ehChatMeta(chatId)) {
+        console.log(
+          `[Meta] resumo do atendimento ${conversa.atendimentoId} mantido só no log; não vai para o grupo do OpenWA.`,
+        );
+      } else {
+        await enviarResumoComRetentativas(conversa);
+      }
 
       console.log(`Atendimento transferido para humano: ${chatId}`);
     }
@@ -1443,6 +1477,80 @@ export function iniciarWebhook(): void {
         });
 
         return;
+      }
+
+      /*
+       * Webhook da WhatsApp Cloud API (Meta).
+       */
+      const urlMeta = new URL(request.url ?? "/", "http://localhost");
+
+      if (urlMeta.pathname === "/meta/webhook") {
+        if (request.method === "GET") {
+          const verificacao = verificarDesafioMeta(urlMeta.searchParams);
+
+          response.statusCode = verificacao.statusCode;
+
+          response.setHeader("Content-Type", "text/plain; charset=utf-8");
+
+          response.end(verificacao.body);
+
+          return;
+        }
+
+        if (request.method === "POST") {
+          const rawBodyMeta = await lerCorpo(request);
+
+          const signatureMeta = request.headers["x-hub-signature-256"];
+
+          if (
+            typeof signatureMeta !== "string" ||
+            !verificarAssinaturaMeta(rawBodyMeta, signatureMeta)
+          ) {
+            responderJson(response, 401, {
+              received: false,
+            });
+
+            return;
+          }
+
+          let payloadMeta: MetaWebhookPayload;
+
+          try {
+            payloadMeta = JSON.parse(
+              rawBodyMeta.toString("utf8"),
+            ) as MetaWebhookPayload;
+          } catch {
+            responderJson(response, 400, {
+              received: false,
+            });
+
+            return;
+          }
+
+          /*
+           * Responde rapidamente à Meta.
+           */
+          responderJson(response, 200, {
+            received: true,
+          });
+
+          processarPayloadMeta(payloadMeta);
+
+          /*
+           * messages[] entram no mesmo núcleo
+           * de atendimento do OpenWA.
+           */
+          for (const evento of normalizarMensagensMeta(payloadMeta)) {
+            processarEvento(evento).catch((erro: unknown) => {
+              console.error(
+                "Erro ao processar mensagem da Meta:",
+                erro instanceof Error ? erro.message : "erro desconhecido",
+              );
+            });
+          }
+
+          return;
+        }
       }
 
       /*
