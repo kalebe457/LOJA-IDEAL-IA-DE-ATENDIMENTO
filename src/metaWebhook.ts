@@ -44,7 +44,7 @@ type MetaErro = {
   };
 };
 
-type MetaStatus = {
+export type MetaStatus = {
   /*
    * wamid da mensagem enviada.
    */
@@ -111,6 +111,34 @@ const PREFIXO_CHAT_META = "meta:";
  */
 export function ehChatMeta(chatId: string): boolean {
   return chatId.startsWith(PREFIXO_CHAT_META);
+}
+
+/**
+ * Lê um chatId no formato meta:<phone_number_id>:<from>.
+ *
+ * O from é devolvido exatamente como veio
+ * no webhook (sem corrigir o 9º dígito).
+ */
+export function lerChatIdMeta(
+  chatId: string,
+): { phoneNumberId: string; from: string } | null {
+  if (!ehChatMeta(chatId)) {
+    return null;
+  }
+
+  const resto = chatId.slice(PREFIXO_CHAT_META.length);
+
+  const separador = resto.indexOf(":");
+
+  if (separador <= 0 || separador === resto.length - 1) {
+    return null;
+  }
+
+  return {
+    phoneNumberId: resto.slice(0, separador),
+
+    from: resto.slice(separador + 1),
+  };
 }
 
 /**
@@ -279,6 +307,29 @@ export function processarPayloadMeta(payload: MetaWebhookPayload): void {
       }
     }
   }
+}
+
+/**
+ * Lista os statuses[] do payload.
+ */
+export function listarStatusesMeta(payload: MetaWebhookPayload): MetaStatus[] {
+  const statuses: MetaStatus[] = [];
+
+  if (payload.object !== "whatsapp_business_account") {
+    return statuses;
+  }
+
+  for (const entrada of payload.entry ?? []) {
+    for (const mudanca of entrada.changes ?? []) {
+      if (mudanca.field !== "messages" || !mudanca.value) {
+        continue;
+      }
+
+      statuses.push(...(mudanca.value.statuses ?? []));
+    }
+  }
+
+  return statuses;
 }
 
 /**

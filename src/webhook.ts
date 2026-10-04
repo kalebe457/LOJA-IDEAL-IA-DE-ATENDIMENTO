@@ -14,12 +14,21 @@ import type { IA } from "./ia.js";
 
 import {
   ehChatMeta,
+  listarStatusesMeta,
   normalizarMensagensMeta,
   processarPayloadMeta,
   verificarAssinaturaMeta,
   verificarDesafioMeta,
+  type MetaStatus,
   type MetaWebhookPayload,
 } from "./metaWebhook.js";
+
+import {
+  descreverDestinoMeta,
+  enviarTextoMeta,
+  metaEnvioAtivo,
+  obterChatIdPorWamid,
+} from "./metaEnvio.js";
 
 import type { Cliente, ResultadoIA } from "./tipos.js";
 
@@ -694,14 +703,24 @@ async function enviarComRetentativas(
   /*
    * Conversas da Meta nunca são enviadas pelo OpenWA.
    *
-   * O envio pela Cloud API ainda não foi implementado.
+   * META_ENVIO_ATIVO decide AQUI entre
+   * somente log e envio real pela Cloud API.
+   *
+   * true no retorno = aceito pela Graph API,
+   * NÃO é confirmação de entrega.
    */
   if (ehChatMeta(chatId)) {
-    console.log(
-      `[Meta] resposta não enviada (envio pela Cloud API ainda não implementado): ${chatId} | ${texto}`,
-    );
+    if (!metaEnvioAtivo()) {
+      console.log(
+        `[Meta] resposta não enviada (META_ENVIO_ATIVO=false) | destino: ${descreverDestinoMeta(chatId)} | tamanho: ${texto.length}`,
+      );
 
-    return false;
+      return false;
+    }
+
+    const resultado = await enviarTextoMeta(chatId, texto);
+
+    return resultado.aceito;
   }
 
   for (let i = 1; i <= tentativas; i++) {
@@ -1332,6 +1351,55 @@ function reenviarResumosPendentes(): void {
 }
 
 /**
+ * Associa um status da Meta ao atendimento
+ * que originou a mensagem.
+ *
+ * Apenas registra: não reenvia, não muda
+ * o estado da IA, não cria atendimento e
+ * não passa para HUMANO.
+ */
+function tratarStatusMeta(status: MetaStatus): void {
+  const wamid = status.id ?? "";
+
+  const situacao = status.status ?? "desconhecido";
+
+  const chatId = wamid ? obterChatIdPorWamid(wamid) : null;
+
+  if (!chatId) {
+    console.log(
+      `[Meta] status ${situacao} para wamid sem correspondência (envio anterior, expirado ou de outra origem): ${wamid || "não informado"}`,
+    );
+
+    return;
+  }
+
+  const conversa = conversas.get(chatId);
+
+  const partes = [
+    `[Meta] status ${situacao} associado`,
+    `atendimento: ${conversa ? conversa.atendimentoId : "já encerrado"}`,
+    `destino: ${descreverDestinoMeta(chatId)}`,
+    `wamid: ${wamid}`,
+  ];
+
+  if (situacao !== "failed") {
+    console.log(partes.join(" | "));
+
+    return;
+  }
+
+  for (const erro of status.errors ?? []) {
+    partes.push(`erro code: ${erro.code ?? "não informado"}`);
+
+    partes.push(`erro title: ${erro.title ?? "não informado"}`);
+  }
+
+  partes.push("sem reenvio automático");
+
+  console.error(partes.join(" | "));
+}
+
+/**
  * Processa um evento do OpenWA.
  */
 async function processarEvento(payload: OpenWAEvent): Promise<void> {
@@ -1535,6 +1603,21 @@ export function iniciarWebhook(): void {
           });
 
           processarPayloadMeta(payloadMeta);
+
+          /*
+           * statuses[] são o resultado posterior
+           * do envio (sent, delivered, read, failed).
+           */
+          for (const status of listarStatusesMeta(payloadMeta)) {
+            try {
+              tratarStatusMeta(status);
+            } catch (erro: unknown) {
+              console.error(
+                "Erro ao tratar status da Meta:",
+                erro instanceof Error ? erro.message : "erro desconhecido",
+              );
+            }
+          }
 
           /*
            * messages[] entram no mesmo núcleo
