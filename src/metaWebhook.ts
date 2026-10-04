@@ -249,9 +249,10 @@ function registrarStatus(status: MetaStatus, phoneNumberId: string): void {
 
     partes.push(`erro title: ${erro.title ?? "não informado"}`);
 
-    if (erro.error_data?.details) {
-      partes.push(`erro details: ${erro.error_data.details}`);
-    }
+    /*
+     * error_data.details não é registrado:
+     * pode conter dados pessoais.
+     */
   }
 
   if (status.status === "failed") {

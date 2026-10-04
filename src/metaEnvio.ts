@@ -222,18 +222,15 @@ export function obterChatIdPorWamid(wamid: string): string | null {
 /**
  * Mascara um telefone para logs.
  *
- * 5591900000001 -> 5591*****0001
+ * Sempre 4 asteriscos, para não revelar o tamanho:
+ * 559198274361 -> 5591****4361
  */
 export function mascararTelefone(telefone: string): string {
   if (telefone.length <= 8) {
-    return "*".repeat(Math.max(0, telefone.length - 2)) + telefone.slice(-2);
+    return "****" + telefone.slice(-2);
   }
 
-  return (
-    telefone.slice(0, 4) +
-    "*".repeat(telefone.length - 8) +
-    telefone.slice(-4)
-  );
+  return telefone.slice(0, 4) + "****" + telefone.slice(-4);
 }
 
 /**

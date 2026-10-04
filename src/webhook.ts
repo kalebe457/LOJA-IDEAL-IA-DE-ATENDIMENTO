@@ -26,6 +26,7 @@ import {
 import {
   descreverDestinoMeta,
   enviarTextoMeta,
+  mascararTelefone,
   metaEnvioAtivo,
   obterChatIdPorWamid,
 } from "./metaEnvio.js";
@@ -308,6 +309,62 @@ function normalizarTelefone(telefone?: string): string {
   }
 
   return telefone.replace(/\D/g, "");
+}
+
+/**
+ * Mascara telefones dentro de um chatId para logs.
+ *
+ * 559198274361@c.us -> 5591****4361@c.us
+ * meta:<id>:559198274361 -> meta:<id>:5591****4361
+ */
+function mascararChatId(chatId: string): string {
+  return chatId.replace(/\d{8,}/g, (digitos) => mascararTelefone(digitos));
+}
+
+/**
+ * Descreve um erro da IA somente com dados técnicos.
+ *
+ * Erros da API da Anthropic: HTTP status, tipo e request_id.
+ * Demais erros: nome e mensagem limitada.
+ */
+function descreverErroIA(erro: unknown): string {
+  if (!(erro instanceof Error)) {
+    return "erro desconhecido";
+  }
+
+  const api = erro as Error & {
+    status?: unknown;
+    requestID?: unknown;
+    error?: { error?: { type?: unknown } };
+  };
+
+  if (typeof api.status === "number") {
+    return [
+      `HTTP ${api.status}`,
+      `type: ${String(api.error?.error?.type ?? "-")}`,
+      `request_id: ${String(api.requestID ?? "-")}`,
+    ].join(" | ");
+  }
+
+  return `${erro.name}: ${erro.message.slice(0, 120)}`;
+}
+
+/**
+ * Lista somente os NOMES dos campos preenchidos
+ * do resumo, para logs sem dados pessoais.
+ */
+function camposPreenchidos(resumo: Cliente["resumo"]): string {
+  const campos = Object.entries(resumo)
+    .filter(
+      ([campo, valor]) =>
+        campo !== "telefone" &&
+        typeof valor === "string" &&
+        valor.trim() !== "" &&
+        valor !== "Não informado",
+    )
+    .map(([campo]) => campo);
+
+  return campos.length > 0 ? campos.join(", ") : "nenhum";
 }
 
 /**
@@ -654,9 +711,14 @@ async function enviarMensagemOpenWA(
         mensagensAutomaticasPendentes.splice(indice, 1);
       }
 
-      const erro = await resposta.text();
+      /*
+       * O corpo é lido para liberar a conexão,
+       * mas não entra na mensagem de erro:
+       * pode conter telefone ou texto.
+       */
+      await resposta.text();
 
-      throw new Error(`OpenWA respondeu ${resposta.status}: ${erro}`);
+      throw new Error(`OpenWA respondeu ${resposta.status}`);
     }
 
     /*
@@ -680,7 +742,7 @@ async function enviarMensagemOpenWA(
        */
     }
 
-    console.log(`Mensagem enviada para ${chatId}`);
+    console.log(`Mensagem enviada para ${mascararChatId(chatId)}`);
   } catch (erro) {
     const indice = mensagensAutomaticasPendentes.indexOf(marcador);
 
@@ -889,7 +951,9 @@ function criarNovaConversa(from?: string, senderPhone?: string): Conversa {
   const usarClaude =
     (process.env.USAR_IA ?? "").trim().toLowerCase() === "claude";
 
-  const ia: IA = new IAClaude();
+  const atendimentoId = gerarAtendimentoId();
+
+  const ia: IA = new IAClaude(atendimentoId);
 
   const agora = Date.now();
 
@@ -898,7 +962,7 @@ function criarNovaConversa(from?: string, senderPhone?: string): Conversa {
 
     ia,
 
-    atendimentoId: gerarAtendimentoId(),
+    atendimentoId,
 
     resumoEnviado: false,
 
@@ -1038,7 +1102,9 @@ async function processarMensagemManual(payload: OpenWAEvent): Promise<void> {
    * não é vendedor.
    */
   if (ehMensagemAutomatica(data)) {
-    console.log(`Mensagem automática ignorada no message.sent: ${chatId}`);
+    console.log(
+      `Mensagem automática ignorada no message.sent: ${mascararChatId(chatId)}`,
+    );
 
     const conversa = conversas.get(chatId);
 
@@ -1057,7 +1123,7 @@ async function processarMensagemManual(payload: OpenWAEvent): Promise<void> {
 
   if (!conversa) {
     console.log(
-      `Mensagem manual ignorada: não existe atendimento ativo para ${chatId}`,
+      `Mensagem manual ignorada: não existe atendimento ativo para ${mascararChatId(chatId)}`,
     );
 
     return;
@@ -1071,7 +1137,7 @@ async function processarMensagemManual(payload: OpenWAEvent): Promise<void> {
     finalizarConversa(chatId, conversa);
 
     console.log(
-      `Mensagem manual ignorada porque o atendimento já estava encerrado: ${chatId}`,
+      `Mensagem manual ignorada porque o atendimento já estava encerrado: ${mascararChatId(chatId)}`,
     );
 
     return;
@@ -1099,7 +1165,7 @@ async function processarMensagemManual(payload: OpenWAEvent): Promise<void> {
     );
   } else {
     console.log(
-      `Mensagem manual recebida para atendimento já assumido: ${chatId}`,
+      `Mensagem manual recebida para atendimento já assumido: ${mascararChatId(chatId)}`,
     );
   }
 }
@@ -1126,7 +1192,7 @@ async function processarMensagemRecebida(payload: OpenWAEvent): Promise<void> {
    * Não processamos grupos.
    */
   if (data.isGroup === true || chatId.endsWith("@g.us")) {
-    console.log(`Mensagem de grupo ignorada: ${chatId}`);
+    console.log(`Mensagem de grupo ignorada: ${mascararChatId(chatId)}`);
 
     return;
   }
@@ -1154,20 +1220,27 @@ async function processarMensagemRecebida(payload: OpenWAEvent): Promise<void> {
 
     conversa.ultimaMensagemEm = momentoMensagem ?? Date.now();
 
-    console.log("Mensagem recebida pelo OpenWA");
-
-    console.log(`chatId: ${chatId}`);
-
-    console.log(`content: ${texto}`);
-
-    console.log(`senderPhone: ${data.senderPhone ?? "Não informado"}`);
+    /*
+     * Sem texto e sem telefone completo (LGPD).
+     */
+    console.log(
+      [
+        `Mensagem recebida (${ehChatMeta(chatId) ? "Meta" : "OpenWA"})`,
+        `atendimento: ${conversa.atendimentoId}`,
+        `chatId: ${mascararChatId(chatId)}`,
+        `tamanho: ${texto.length}`,
+        `senderPhone: ${data.senderPhone ? mascararTelefone(normalizarTelefone(data.senderPhone)) : "Não informado"}`,
+      ].join(" | "),
+    );
 
     /*
      * Se vendedor já assumiu,
      * a IA permanece desligada.
      */
     if (conversa.cliente.status === "HUMANO") {
-      console.log(`IA desativada para ${chatId}: atendimento humano.`);
+      console.log(
+        `IA desativada para ${mascararChatId(chatId)}: atendimento humano.`,
+      );
 
       return;
     }
@@ -1178,8 +1251,7 @@ async function processarMensagemRecebida(payload: OpenWAEvent): Promise<void> {
       resultado = await conversa.ia.responder(texto, conversa.cliente);
     } catch (erro: unknown) {
       console.error(
-        "Falha na IA:",
-        erro instanceof Error ? erro.message : "erro desconhecido",
+        `Falha na IA (${conversa.atendimentoId}): ${descreverErroIA(erro)}`,
       );
 
       const observacoes = conversa.cliente.resumo.observacoes;
@@ -1245,15 +1317,33 @@ async function processarMensagemRecebida(payload: OpenWAEvent): Promise<void> {
 
     console.log(`Status: ${resultado.status}`);
 
-    console.log("Resumo:", JSON.stringify(conversa.cliente.resumo, null, 2));
+    console.log(
+      `Resumo (${conversa.atendimentoId}) campos preenchidos: ${camposPreenchidos(conversa.cliente.resumo)}`,
+    );
 
     /*
-     * Envia a resposta ao cliente.
+     * Modo log-only da Meta (META_ENVIO_ATIVO=false):
+     * a resposta NÃO é enviada de propósito.
+     *
+     * Isso não é falha de envio, então o estado
+     * da triagem NÃO é desfeito e ela avança normalmente.
+     *
+     * A flag é lida uma única vez aqui para decidir.
      */
-    const clienteAvisado = await enviarComRetentativas(
-      chatId,
-      resultado.resposta,
-    );
+    const modoSomenteLog = ehChatMeta(chatId) && !metaEnvioAtivo();
+
+    let clienteAvisado = false;
+
+    if (modoSomenteLog) {
+      console.log(
+        `[Meta] resposta não enviada (META_ENVIO_ATIVO=false) | destino: ${descreverDestinoMeta(chatId)} | tamanho: ${resultado.resposta.length}`,
+      );
+    } else {
+      /*
+       * Envia a resposta ao cliente (tentativa real).
+       */
+      clienteAvisado = await enviarComRetentativas(chatId, resultado.resposta);
+    }
 
     if (clienteAvisado) {
       /*
@@ -1261,8 +1351,26 @@ async function processarMensagemRecebida(payload: OpenWAEvent): Promise<void> {
        * representa atividade.
        */
       conversa.ultimaMensagemEm = Date.now();
-    } else {
-      console.error(`Cliente ${chatId} não recebeu a resposta.`);
+    } else if (!modoSomenteLog) {
+      console.error(
+        `Cliente ${mascararChatId(chatId)} não recebeu a resposta.`,
+      );
+
+      /*
+       * Houve tentativa REAL de envio e ela falhou:
+       * a pergunta não pode ficar registrada como feita.
+       *
+       * Só durante a triagem (IA). Em HUMANO nada é
+       * desfeito: a triagem não reabre e o resumo
+       * segue o fluxo normal, uma única vez.
+       */
+      if (resultado.status === "IA") {
+        conversa.ia.desfazerRespostaNaoEntregue();
+
+        console.log(
+          `Atendimento ${conversa.atendimentoId}: resposta não entregue desfeita; a pergunta será feita novamente.`,
+        );
+      }
     }
 
     /*
@@ -1284,7 +1392,9 @@ async function processarMensagemRecebida(payload: OpenWAEvent): Promise<void> {
         await enviarResumoComRetentativas(conversa);
       }
 
-      console.log(`Atendimento transferido para humano: ${chatId}`);
+      console.log(
+        `Atendimento transferido para humano: ${mascararChatId(chatId)}`,
+      );
     }
   });
 }
@@ -1301,7 +1411,7 @@ function adicionarNaFila(chatId: string, tarefa: () => Promise<void>): void {
     .then(tarefa)
     .catch((erro: unknown) => {
       console.error(
-        "Erro ao processar mensagem do OpenWA:",
+        "Erro ao processar mensagem:",
         erro instanceof Error ? erro.message : "erro desconhecido",
       );
     });
@@ -1450,7 +1560,6 @@ async function processarEvento(payload: OpenWAEvent): Promise<void> {
       [
         "Evento anterior ao início do webhook ignorado.",
         `Evento: ${payload.event}`,
-        `Mensagem: ${typeof data.body === "string" ? data.body : ""}`,
         `Horário do webhook: ${new Date(webhookIniciadoEm).toLocaleString(
           "pt-BR",
         )}`,
@@ -1478,7 +1587,6 @@ async function processarEvento(payload: OpenWAEvent): Promise<void> {
         "Evento antigo ignorado.",
         `Evento: ${payload.event}`,
         `Idade: ${formatarIdadeMensagem(payload)}`,
-        `Mensagem: ${typeof data.body === "string" ? data.body : ""}`,
       ].join(" | "),
     );
 
@@ -1701,7 +1809,12 @@ export function iniciarWebhook(): void {
       /*
        * Processamento assíncrono.
        */
-      void processarEvento(payload);
+      processarEvento(payload).catch((erro: unknown) => {
+        console.error(
+          "Erro ao processar evento do OpenWA:",
+          erro instanceof Error ? erro.message : "erro desconhecido",
+        );
+      });
     } catch (erro: unknown) {
       if (!response.headersSent) {
         responderJson(response, 500, {

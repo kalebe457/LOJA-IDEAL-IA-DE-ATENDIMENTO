@@ -705,6 +705,34 @@ export class IAClaude implements IA {
   private resumoAtual: ResumoCliente | null = null;
 
   /**
+   * A apresentação ainda precisa chegar ao cliente?
+   *
+   * Volta a true se a resposta que a continha
+   * não pôde ser enviada.
+   */
+  private apresentacaoPendente = false;
+
+  /**
+   * O que a última resposta registrou como entregue.
+   *
+   * Usado somente para desfazer quando o envio falha.
+   */
+  private ultimoTurno: {
+    indiceResposta: number;
+    incluiuApresentacao: boolean;
+  } | null = null;
+
+  /**
+   * ID interno do atendimento (ATD-...),
+   * usado somente na medição de tokens.
+   */
+  private readonly atendimentoId: string;
+
+  constructor(atendimentoId: string) {
+    this.atendimentoId = atendimentoId;
+  }
+
+  /**
    * Permite que o webhook saiba se esse atendimento
    * ficou inativo por 20 minutos.
    */
@@ -735,10 +763,59 @@ export class IAClaude implements IA {
     this.etapaAtual = null;
 
     this.resumoAtual = criarResumoVazio(cliente.telefone);
+
+    this.apresentacaoPendente = true;
+  }
+
+  /**
+   * Chamado quando houve tentativa REAL de envio
+   * da última resposta e ela falhou.
+   *
+   * Desfaz somente o que supõe que o cliente
+   * recebeu a resposta:
+   *
+   * - a resposta do assistente sai do histórico
+   *   (a mensagem do cliente continua);
+   * - nenhuma pergunta fica aguardando resposta;
+   * - a apresentação volta a ficar pendente,
+   *   se fazia parte da resposta.
+   *
+   * O resumo e as etapas concluídas são mantidos:
+   * vieram do que o cliente realmente informou.
+   */
+  desfazerRespostaNaoEntregue(): void {
+    const turno = this.ultimoTurno;
+
+    if (!turno) {
+      return;
+    }
+
+    this.ultimoTurno = null;
+
+    const ultima = this.historico[turno.indiceResposta];
+
+    if (
+      turno.indiceResposta === this.historico.length - 1 &&
+      ultima?.role === "assistant"
+    ) {
+      this.historico.pop();
+    }
+
+    this.etapaAtual = null;
+
+    if (turno.incluiuApresentacao) {
+      this.apresentacaoPendente = true;
+    }
   }
 
   async responder(mensagem: string, cliente: Cliente): Promise<ResultadoIA> {
     const agora = Date.now();
+
+    /*
+     * Um novo turno começa: o anterior
+     * não pode mais ser desfeito.
+     */
+    this.ultimoTurno = null;
 
     const novoAtendimento =
       !this.atendimentoIniciado || this.estaInativa(agora);
@@ -874,6 +951,27 @@ export class IAClaude implements IA {
       ],
     });
 
+    /*
+     * Medição de tokens por chamada.
+     *
+     * Somente dados técnicos: sem prompt,
+     * resposta, histórico, telefone ou resumo.
+     */
+    const uso = resposta.usage;
+
+    console.log(
+      [
+        "[Claude] uso",
+        `atendimento: ${this.atendimentoId}`,
+        `modelo: ${resposta.model}`,
+        `input_tokens: ${uso.input_tokens}`,
+        `output_tokens: ${uso.output_tokens}`,
+        `cache_creation_input_tokens: ${uso.cache_creation_input_tokens ?? "-"}`,
+        `cache_read_input_tokens: ${uso.cache_read_input_tokens ?? "-"}`,
+        `service_tier: ${uso.service_tier ?? "-"}`,
+      ].join(" | "),
+    );
+
     const saida = resposta.parsed_output as SaidaClaude | null;
 
     if (!saida) {
@@ -989,6 +1087,12 @@ export class IAClaude implements IA {
     let respostaTexto = saida.resposta.trim();
 
     /*
+     * A apresentação acompanha a primeira resposta
+     * que de fato chegar ao cliente.
+     */
+    const incluirApresentacao = this.apresentacaoPendente;
+
+    /*
      * Quando o atendimento é humano,
      * encerramos a etapa atual.
      */
@@ -997,7 +1101,7 @@ export class IAClaude implements IA {
 
       respostaTexto = gerarRespostaHumano();
 
-      if (novoAtendimento) {
+      if (incluirApresentacao) {
         respostaTexto = `${MENSAGEM_INICIAL}\n\n${gerarRespostaHumano()}`;
       }
 
@@ -1039,7 +1143,7 @@ export class IAClaude implements IA {
        * sempre apresenta a assistente antes
        * da primeira pergunta da triagem.
        */
-      if (novoAtendimento) {
+      if (incluirApresentacao) {
         respostaTexto = `${MENSAGEM_INICIAL}\n\n${pergunta}`;
       } else {
         respostaTexto = pergunta;
@@ -1074,6 +1178,23 @@ export class IAClaude implements IA {
         content: respostaTexto,
       },
     );
+
+    /*
+     * Registra o turno para poder desfazê-lo
+     * se o envio desta resposta falhar.
+     */
+    const apresentacaoNaResposta =
+      incluirApresentacao && respostaTexto.startsWith(MENSAGEM_INICIAL);
+
+    if (apresentacaoNaResposta) {
+      this.apresentacaoPendente = false;
+    }
+
+    this.ultimoTurno = {
+      indiceResposta: this.historico.length - 1,
+
+      incluiuApresentacao: apresentacaoNaResposta,
+    };
 
     /*
      * Atualiza o momento da última atividade
