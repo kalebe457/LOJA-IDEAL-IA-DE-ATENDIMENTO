@@ -3,12 +3,8 @@ export type StatusAtendimento = "IA" | "HUMANO";
 export type ResumoCliente = {
   nome: string;
   telefone: string;
-  necessidade: string;
-  ambiente: string;
-  medidas: string;
   produto: string;
   quantidade: string;
-  prazo: string;
   observacoes: string;
 };
 

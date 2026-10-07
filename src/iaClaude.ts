@@ -24,16 +24,13 @@ const client = new Anthropic();
 /*
  * Ordem da triagem.
  */
-const ORDEM_ETAPAS = [
-  "nome",
-  "necessidade",
-  "ambiente",
-  "produto",
-  "medidas",
-  "quantidade",
-  "prazo",
-  "observacoes",
-] as const;
+const ORDEM_ETAPAS = ["nome", "produto", "quantidade", "observacoes"] as const;
+
+/*
+ * Uma etapa sem resposta válida depois de
+ * tantas perguntas é pulada.
+ */
+const MAX_PERGUNTAS_POR_ETAPA = 2;
 
 type EtapaTriagem = (typeof ORDEM_ETAPAS)[number];
 
@@ -73,32 +70,11 @@ const SCHEMA = {
             "Nome do cliente, somente se informado. Caso não informe ou não queira informar, use 'Não informado'.",
         },
 
-        necessidade: {
-          type: "string",
-
-          description:
-            "O que o cliente precisa comprar ou resolver. Use somente informações fornecidas pelo cliente.",
-        },
-
-        ambiente: {
-          type: "string",
-
-          description:
-            "Ambiente ou local relacionado ao pedido, quando informado.",
-        },
-
-        medidas: {
-          type: "string",
-
-          description:
-            "Medidas realmente informadas pelo cliente. Normalize expressões como '3 por 2 metros' para '3m x 2m'. Nunca calcule.",
-        },
-
         produto: {
           type: "string",
 
           description:
-            "Produto ou material explicitamente mencionado pelo cliente. Nunca recomende um produto.",
+            "Produto ou interesse do cliente, como ele descreveu: produto, marca, modelo, material, uma pergunta sobre um item ou o que ele precisa resolver. Use somente o que o cliente escreveu. Nunca recomende um produto.",
         },
 
         quantidade: {
@@ -108,37 +84,28 @@ const SCHEMA = {
             "Quantidade realmente informada pelo cliente. Nunca estime.",
         },
 
-        prazo: {
-          type: "string",
-
-          description:
-            "Prazo, data ou urgência realmente informados pelo cliente. Nunca invente. Exemplos válidos: 'hoje', 'amanhã', 'sexta-feira', '6/10', 'semana que vem'.",
-        },
-
         observacoes: {
           type: "string",
 
           description:
-            "Informações adicionais relevantes para o vendedor. Se o cliente disser que não possui observações, use 'Nenhuma observação adicional.'.",
+            "Informações adicionais relevantes para o vendedor que o cliente informou (por exemplo medidas, local de uso, urgência ou detalhes do pedido). Se o cliente disser que não possui observações, use 'Nenhuma observação adicional.'.",
         },
       },
 
-      required: [
-        "nome",
-        "necessidade",
-        "ambiente",
-        "medidas",
-        "produto",
-        "quantidade",
-        "prazo",
-        "observacoes",
-      ],
+      required: ["nome", "produto", "quantidade", "observacoes"],
 
       additionalProperties: false,
     },
+
+    quantidade_aplicavel: {
+      type: "boolean",
+
+      description:
+        "true quando faz sentido perguntar a quantidade para o que o cliente procura. false quando não faz sentido (por exemplo, dúvida geral sobre um item, marca ou serviço).",
+    },
   },
 
-  required: ["resposta", "status", "resumo"],
+  required: ["resposta", "status", "resumo", "quantidade_aplicavel"],
 
   additionalProperties: false,
 } as const;
@@ -146,71 +113,52 @@ const SCHEMA = {
 const INSTRUCOES = `
 Você é a assistente virtual da Loja Ideal, uma loja de material de construção.
 
-Seu objetivo é fazer a triagem do cliente e preparar um resumo para um vendedor humano.
+Seu objetivo é coletar somente o mínimo necessário para um vendedor humano continuar o atendimento, e encaminhar o cliente o mais rápido possível.
 
 A TRIAGEM SEGUE ESTA SEQUÊNCIA:
 
 1. nome
-2. necessidade
-3. ambiente
-4. produto
-5. medidas
-6. quantidade
-7. prazo
-8. observações
+2. produto/interesse
+3. quantidade (somente quando fizer sentido)
+4. observações
 
 REGRAS PRINCIPAIS:
 
 - Faça no máximo UMA pergunta por mensagem.
 - Não faça várias perguntas juntas.
-- Não repita perguntas que já foram respondidas.
-- Aproveite todas as informações que o cliente fornecer espontaneamente.
+- Nunca pergunte novamente algo que o cliente já informou.
+- Aproveite todas as informações que o cliente fornecer espontaneamente, inclusive na primeira mensagem.
 - Se uma mensagem trouxer várias informações, preencha todos os campos correspondentes.
 - Não invente informações.
-- Não recomende produtos.
-- Não calcule quantidade de materiais.
-- Não calcule área.
+- Não pergunte ambiente, medidas, prazo ou necessidade.
+- Não calcule quantidade de materiais nem área.
 - Não avalie tecnicamente uma obra.
 - Se o cliente não souber alguma informação, registre "Não informado".
 - Se o cliente não quiser informar alguma informação, não insista e siga para a próxima etapa.
 - O nome deve ser perguntado, mas o cliente não é obrigado a informar.
-- As medidas devem ser tentadas, mas o cliente não é obrigado a informar.
+
+VOCÊ NUNCA PODE:
+
+- informar preço, estoque, disponibilidade ou prazo de entrega;
+- recomendar produto como vendedor;
+- negociar ou fornecer orçamento.
+
+Você apenas coleta e organiza as informações para o vendedor.
 
 NOME:
 Tente descobrir o nome do cliente.
 
-NECESSIDADE:
-Descubra o que o cliente precisa comprar ou resolver.
-
-AMBIENTE:
-Descubra onde o material será utilizado.
-
-PRODUTO:
-Descubra qual produto ou material o cliente procura.
-
-MEDIDAS:
-Pergunte pelas medidas quando fizer sentido.
+PRODUTO/INTERESSE:
+Registre o que o cliente procura do jeito que ele descreveu: produto, marca, modelo, material, uma pergunta sobre um item ou o que ele precisa resolver.
+A necessidade do cliente deve ser identificada pelo que ele escreveu, sem perguntar separadamente.
 
 QUANTIDADE:
-Pergunte qual quantidade o cliente precisa.
-Se houver vários produtos, tente descobrir a quantidade de cada um.
-
-PRAZO:
-Pergunte para quando o cliente precisa dos materiais.
-Aceite respostas como:
-- hoje;
-- amanhã;
-- depois de amanhã;
-- sexta-feira;
-- semana que vem;
-- 6/10;
-- dia 15;
-- urgente;
-- sem pressa;
-- quando puder.
+Opcional. Registre se o cliente informar.
+Indique em quantidade_aplicavel se faz sentido perguntar a quantidade para o que o cliente procura.
+Se houver vários produtos, registre a quantidade de cada um quando informada.
 
 OBSERVAÇÕES:
-Pergunte se existe alguma observação adicional para o vendedor.
+Registre qualquer detalhe adicional útil para o vendedor que o cliente informar (por exemplo medidas, local de uso ou urgência), sem perguntar por eles.
 
 RECLAMAÇÕES:
 
@@ -255,6 +203,8 @@ type SaidaClaude = {
   status: string;
 
   resumo: Record<string, unknown>;
+
+  quantidade_aplicavel?: boolean;
 };
 
 /**
@@ -362,6 +312,32 @@ function assuntoDeRisco(mensagem: string): boolean {
   return padroes.some((padrao) => padrao.test(texto));
 }
 
+/*
+ * Expressões de quem não sabe ou não quer
+ * informar (texto já normalizado, sem acento).
+ */
+const NUCLEOS_RECUSA = [
+  /\bnao (sei|lembro)( (dizer|informar|responder))?\b/,
+  /\bnao (faco|tenho)( a menor| nenhuma)? ideia\b/,
+  /\bnem ideia\b/,
+  /\bsei la\b/,
+  /\bnao tenho (certeza|(essa|esta|a) informacao|informacao)\b/,
+  /\b(nao quero|prefiro nao) (informar|dizer|falar|responder)\b/,
+];
+
+/*
+ * Palavras que podem acompanhar a recusa
+ * sem trazer informação nova.
+ */
+const COMPLEMENTOS_RECUSA = new Set([
+  "eu", "ainda", "agora", "no", "momento", "por", "enquanto", "certo", "ao",
+  "a", "o", "as", "os", "da", "do", "de", "essa", "esse", "esta", "isso",
+  "quantidade", "quantidades", "nome", "produto", "material", "observacao",
+  "observacoes", "informacao", "info", "exatamente", "direito", "bem",
+  "mesmo", "quanto", "quantos", "quantas", "vou", "precisar", "ok", "entao",
+  "infelizmente", "desculpa", "ne", "viu", "sobre",
+]);
+
 /**
  * Detecta respostas negativas.
  */
@@ -387,9 +363,40 @@ function clienteNaoSabeOuNaoQuerInformar(mensagem: string): boolean {
     "nao tenho nenhuma",
   ];
 
-  return respostasNegativas.some(
-    (resposta) => texto === normalizarTexto(resposta),
-  );
+  if (respostasNegativas.some((resposta) => texto === normalizarTexto(resposta))) {
+    return true;
+  }
+
+  /*
+   * Variações naturais: "não sei a quantidade",
+   * "não faço ideia", "não tenho essa informação"...
+   *
+   * Só é recusa se, tirando a expressão, sobrar
+   * apenas complemento sem informação. Assim
+   * "não sei a quantidade, mas quero 10 caixas"
+   * NÃO é recusa.
+   */
+  let resto = texto;
+
+  let encontrouRecusa = false;
+
+  for (const padrao of NUCLEOS_RECUSA) {
+    if (padrao.test(resto)) {
+      encontrouRecusa = true;
+
+      resto = resto.replace(padrao, " ");
+    }
+  }
+
+  if (!encontrouRecusa) {
+    return false;
+  }
+
+  return resto
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter((palavra) => palavra !== "")
+    .every((palavra) => COMPLEMENTOS_RECUSA.has(palavra));
 }
 
 /**
@@ -419,7 +426,7 @@ function semObservacoes(mensagem: string): boolean {
 /**
  * Detecta respostas que não trazem uma informação útil.
  *
- * Isso evita transformar "ok" ou "obrigada" em prazo,
+ * Isso evita transformar "ok" ou "obrigada" em nome,
  * quantidade etc.
  */
 function mensagemSemInformacao(mensagem: string): boolean {
@@ -456,17 +463,9 @@ function criarResumoVazio(telefone: string): ResumoCliente {
     nome: NAO_INFORMADO,
     telefone,
 
-    necessidade: NAO_INFORMADO,
-
-    ambiente: NAO_INFORMADO,
-
-    medidas: NAO_INFORMADO,
-
     produto: NAO_INFORMADO,
 
     quantidade: NAO_INFORMADO,
-
-    prazo: NAO_INFORMADO,
 
     observacoes: NAO_INFORMADO,
   };
@@ -480,25 +479,13 @@ function perguntaDaEtapa(etapa: EtapaTriagem, resumo: ResumoCliente): string {
     case "nome":
       return "Para começarmos, qual é o seu nome?";
 
-    case "necessidade":
-      return "O que você precisa comprar ou resolver?";
-
-    case "ambiente":
-      return "Em qual ambiente ou local será usado esse material?";
-
     case "produto":
-      return "Qual produto ou material você está procurando?";
-
-    case "medidas":
-      return "Você sabe as medidas do local? Se sim, poderia me informar?";
+      return "Qual produto ou material você está procurando? Pode ser também a marca ou o modelo.";
 
     case "quantidade":
       return campoPreenchido(resumo.produto)
-        ? "Qual quantidade você precisa de cada material?"
+        ? "Qual quantidade você precisa? Se ainda não souber, sem problema."
         : "Qual quantidade você precisa?";
-
-    case "prazo":
-      return "Para quando você precisa desses materiais?";
 
     case "observacoes":
       return "Tem alguma observação que você gostaria de acrescentar para o vendedor?";
@@ -516,28 +503,12 @@ function marcarEtapasPreenchidas(
     etapasConcluidas.add("nome");
   }
 
-  if (campoPreenchido(resumo.necessidade)) {
-    etapasConcluidas.add("necessidade");
-  }
-
-  if (campoPreenchido(resumo.ambiente)) {
-    etapasConcluidas.add("ambiente");
-  }
-
   if (campoPreenchido(resumo.produto)) {
     etapasConcluidas.add("produto");
   }
 
-  if (campoPreenchido(resumo.medidas)) {
-    etapasConcluidas.add("medidas");
-  }
-
   if (campoPreenchido(resumo.quantidade)) {
     etapasConcluidas.add("quantidade");
-  }
-
-  if (campoPreenchido(resumo.prazo)) {
-    etapasConcluidas.add("prazo");
   }
 
   if (campoPreenchido(resumo.observacoes)) {
@@ -566,11 +537,11 @@ function encontrarProximaEtapa(
  *
  * Exemplo:
  *
- * etapa = prazo
- * mensagem = "6/10"
+ * etapa = quantidade
+ * mensagem = "10 sacos"
  *
  * resultado:
- * prazo = "6/10"
+ * quantidade = "10 sacos"
  *
  * Isso impede que a pergunta seja repetida
  * apenas porque o Claude não interpretou sozinho
@@ -598,23 +569,8 @@ function extrairRespostaDireta(
     case "nome":
       return texto;
 
-    case "necessidade":
-      return texto;
-
-    case "ambiente":
-      return texto;
-
     case "produto":
       return texto;
-
-    case "medidas": {
-      const pareceMedida =
-        /\b\d+(?:[,.]\d+)?\s*(?:m|cm|mm)?\s*(?:x|por)\s*\d+(?:[,.]\d+)?\s*(?:m|cm|mm)?\b/i.test(
-          texto,
-        );
-
-      return pareceMedida ? texto : null;
-    }
 
     case "quantidade": {
       const pareceQuantidade =
@@ -623,19 +579,6 @@ function extrairRespostaDireta(
         );
 
       return pareceQuantidade ? texto : null;
-    }
-
-    case "prazo": {
-      const parecePrazo =
-        /\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b/i.test(texto) ||
-        /\b\d{1,2}\s*de\s*(janeiro|fevereiro|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)\b/i.test(
-          texto,
-        ) ||
-        /\b(hoje|amanha|depois de amanha|segunda|terca|quarta|quinta|sexta|sabado|domingo|semana que vem|mes que vem|esse mes|este mes|urgente|com urgencia|sem pressa|quando puder)\b/i.test(
-          normalizarTexto(texto),
-        );
-
-      return parecePrazo ? texto : null;
     }
 
     case "observacoes":
@@ -687,6 +630,12 @@ export class IAClaude implements IA {
   private etapaAtual: EtapaTriagem | null = null;
 
   /**
+   * Quantas vezes cada etapa já foi perguntada
+   * no atendimento atual.
+   */
+  private readonly perguntasPorEtapa = new Map<EtapaTriagem, number>();
+
+  /**
    * Indica se já existe um atendimento ativo.
    */
   private atendimentoIniciado = false;
@@ -720,6 +669,7 @@ export class IAClaude implements IA {
   private ultimoTurno: {
     indiceResposta: number;
     incluiuApresentacao: boolean;
+    etapaPerguntada: EtapaTriagem | null;
   } | null = null;
 
   /**
@@ -759,6 +709,8 @@ export class IAClaude implements IA {
     this.indiceInicioAtendimento = this.historico.length;
 
     this.etapasConcluidas.clear();
+
+    this.perguntasPorEtapa.clear();
 
     this.etapaAtual = null;
 
@@ -802,6 +754,16 @@ export class IAClaude implements IA {
     }
 
     this.etapaAtual = null;
+
+    /*
+     * A pergunta não chegou ao cliente:
+     * não conta como tentativa.
+     */
+    if (turno.etapaPerguntada) {
+      const feitas = this.perguntasPorEtapa.get(turno.etapaPerguntada) ?? 0;
+
+      this.perguntasPorEtapa.set(turno.etapaPerguntada, Math.max(0, feitas - 1));
+    }
 
     if (turno.incluiuApresentacao) {
       this.apresentacaoPendente = true;
@@ -884,17 +846,9 @@ export class IAClaude implements IA {
 
           telefone: resumoBase.telefone,
 
-          necessidade: resumoBase.necessidade,
-
-          ambiente: resumoBase.ambiente,
-
-          medidas: resumoBase.medidas,
-
           produto: resumoBase.produto,
 
           quantidade: resumoBase.quantidade,
-
-          prazo: resumoBase.prazo,
 
           observacoes: resumoBase.observacoes,
         },
@@ -991,20 +945,9 @@ export class IAClaude implements IA {
 
       telefone: cliente.telefone,
 
-      necessidade: normalizarCampo(
-        saida.resumo.necessidade,
-        anterior.necessidade,
-      ),
-
-      ambiente: normalizarCampo(saida.resumo.ambiente, anterior.ambiente),
-
-      medidas: normalizarCampo(saida.resumo.medidas, anterior.medidas),
-
       produto: normalizarCampo(saida.resumo.produto, anterior.produto),
 
       quantidade: normalizarCampo(saida.resumo.quantidade, anterior.quantidade),
-
-      prazo: normalizarCampo(saida.resumo.prazo, anterior.prazo),
 
       observacoes: normalizarCampo(
         saida.resumo.observacoes,
@@ -1018,12 +961,12 @@ export class IAClaude implements IA {
      *
      * Exemplo:
      *
-     * Cliente responde "6/10"
-     * etapa atual = prazo
+     * Cliente responde "10 sacos"
+     * etapa atual = quantidade
      *
-     * Mesmo que o Claude retorne prazo como
+     * Mesmo que o Claude retorne quantidade como
      * "Não informado", o sistema reconhece
-     * "6/10" como prazo.
+     * "10 sacos" como quantidade.
      *
      * Um pedido explícito de atendimento humano
      * NÃO é resposta da etapa pendente.
@@ -1038,7 +981,11 @@ export class IAClaude implements IA {
     ) {
       const respostaDireta = extrairRespostaDireta(etapaAnterior, mensagem);
 
-      if (respostaDireta !== null) {
+      /*
+       * Fallback: só quando o Claude não
+       * preencheu o campo.
+       */
+      if (respostaDireta !== null && !campoPreenchido(resumo[etapaAnterior])) {
         resumo[etapaAnterior] = respostaDireta;
       }
     }
@@ -1065,6 +1012,31 @@ export class IAClaude implements IA {
      * Marca campos preenchidos automaticamente.
      */
     marcarEtapasPreenchidas(resumo, this.etapasConcluidas);
+
+    /*
+     * Quantidade é opcional: não perguntamos
+     * quando não faz sentido para o pedido.
+     */
+    if (saida.quantidade_aplicavel === false) {
+      this.etapasConcluidas.add("quantidade");
+    }
+
+    /*
+     * Etapa ainda sem resposta válida depois do
+     * máximo de perguntas: pula para a próxima.
+     */
+    for (const etapa of ORDEM_ETAPAS) {
+      if (
+        !this.etapasConcluidas.has(etapa) &&
+        (this.perguntasPorEtapa.get(etapa) ?? 0) >= MAX_PERGUNTAS_POR_ETAPA
+      ) {
+        this.etapasConcluidas.add(etapa);
+
+        console.log(
+          `Atendimento ${this.atendimentoId}: etapa ${etapa} pulada após ${MAX_PERGUNTAS_POR_ETAPA} perguntas sem resposta válida.`,
+        );
+      }
+    }
 
     /*
      * Situações especiais.
@@ -1144,6 +1116,11 @@ export class IAClaude implements IA {
 
       this.etapaAtual = proximaEtapa;
 
+      this.perguntasPorEtapa.set(
+        proximaEtapa,
+        (this.perguntasPorEtapa.get(proximaEtapa) ?? 0) + 1,
+      );
+
       /*
        * Novo atendimento:
        * sempre apresenta a assistente antes
@@ -1200,6 +1177,8 @@ export class IAClaude implements IA {
       indiceResposta: this.historico.length - 1,
 
       incluiuApresentacao: apresentacaoNaResposta,
+
+      etapaPerguntada: status === "IA" ? proximaEtapa : null,
     };
 
     /*

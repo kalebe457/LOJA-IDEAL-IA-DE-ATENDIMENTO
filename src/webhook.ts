@@ -31,6 +31,13 @@ import {
   obterChatIdPorWamid,
 } from "./metaEnvio.js";
 
+import {
+  AVISO_ENCAMINHAMENTO_FORA_DO_HORARIO,
+  MENSAGEM_LOJA_FECHADA,
+  chavePeriodoFechado,
+  lojaAberta,
+} from "./horarioFuncionamento.js";
+
 import type { Cliente, ResultadoIA } from "./tipos.js";
 
 /*
@@ -159,6 +166,15 @@ const conversas = new Map<string, Conversa>();
  * precisam ser reenviados.
  */
 const resumosPendentes = new Map<string, Conversa>();
+
+/*
+ * Aviso de loja fechada já enviado por chatId.
+ *
+ * O valor é a chave do período fechado
+ * (data da próxima abertura), para avisar
+ * uma única vez por período.
+ */
+const avisosLojaFechada = new Map<string, string>();
 
 export type OpenWAEvent = {
   event?: string;
@@ -824,17 +840,9 @@ function formatarResumo(conversa: Conversa): string {
 
     `Telefone: ${resumo.telefone}`,
 
-    `Necessidade: ${resumo.necessidade}`,
-
-    `Ambiente: ${resumo.ambiente}`,
-
-    `Medidas: ${resumo.medidas}`,
-
     `Produto: ${resumo.produto}`,
 
     `Quantidade: ${resumo.quantidade}`,
-
-    `Prazo: ${resumo.prazo}`,
 
     `Observações: ${resumo.observacoes}`,
   ].join("\n");
@@ -908,17 +916,9 @@ function criarCliente(from?: string, senderPhone?: string): Cliente {
 
       telefone,
 
-      necessidade: "Não informado",
-
-      ambiente: "Não informado",
-
-      medidas: "Não informado",
-
       produto: "Não informado",
 
       quantidade: "Não informado",
-
-      prazo: "Não informado",
 
       observacoes: "Não informado",
     },
@@ -1171,6 +1171,43 @@ async function processarMensagemManual(payload: OpenWAEvent): Promise<void> {
 }
 
 /**
+ * Responde a uma mensagem recebida com a loja fechada.
+ *
+ * Não cria atendimento, não chama a IA e não
+ * gera resumo. O aviso vai uma única vez por
+ * período fechado para cada chatId.
+ */
+async function avisarLojaFechada(chatId: string): Promise<void> {
+  const periodo = chavePeriodoFechado();
+
+  if (avisosLojaFechada.get(chatId) === periodo) {
+    console.log(
+      `Loja fechada: aviso já enviado neste período para ${mascararChatId(chatId)}; mensagem sem resposta.`,
+    );
+
+    return;
+  }
+
+  /*
+   * Modo log-only da Meta conta como avisado,
+   * igual ao restante do fluxo.
+   */
+  const modoSomenteLog = ehChatMeta(chatId) && !metaEnvioAtivo();
+
+  const enviado = await enviarComRetentativas(chatId, MENSAGEM_LOJA_FECHADA);
+
+  if (enviado || modoSomenteLog) {
+    avisosLojaFechada.set(chatId, periodo);
+
+    console.log(`Loja fechada: aviso enviado para ${mascararChatId(chatId)}.`);
+  } else {
+    console.error(
+      `Loja fechada: aviso não entregue para ${mascararChatId(chatId)}; será tentado na próxima mensagem.`,
+    );
+  }
+}
+
+/**
  * Processa mensagem recebida do cliente.
  */
 async function processarMensagemRecebida(payload: OpenWAEvent): Promise<void> {
@@ -1205,6 +1242,24 @@ async function processarMensagemRecebida(payload: OpenWAEvent): Promise<void> {
   }
 
   adicionarNaFila(chatId, async () => {
+    /*
+     * Horário de funcionamento.
+     *
+     * Fora do horário, só um atendimento que
+     * já estava ativo continua. Mensagem sem
+     * atendimento ativo recebe o aviso de loja
+     * fechada e não inicia triagem.
+     */
+    const ativa = conversas.get(chatId);
+
+    const temAtendimentoAtivo = !!ativa && !conversaEstaInativa(ativa);
+
+    if (!temAtendimentoAtivo && !lojaAberta()) {
+      await avisarLojaFechada(chatId);
+
+      return;
+    }
+
     const conversa = obterConversa(chatId, data.from, data.senderPhone);
 
     /*
@@ -1314,6 +1369,15 @@ async function processarMensagemRecebida(payload: OpenWAEvent): Promise<void> {
      * Garante novamente o telefone.
      */
     atualizarTelefone(conversa, data);
+
+    /*
+     * Triagem iniciada antes do fechamento e
+     * concluída depois: o cliente fica sabendo
+     * que o vendedor só retorna na reabertura.
+     */
+    if (resultado.status === "HUMANO" && !lojaAberta()) {
+      resultado.resposta = `${resultado.resposta}\n\n${AVISO_ENCAMINHAMENTO_FORA_DO_HORARIO}`;
+    }
 
     console.log(`Status: ${resultado.status}`);
 
@@ -1439,6 +1503,14 @@ function verificarInatividade(): void {
 
     finalizarConversa(chatId, conversa);
   }
+
+  /*
+   * Com a loja aberta, nenhum aviso de
+   * período fechado anterior vale mais.
+   */
+  if (avisosLojaFechada.size > 0 && lojaAberta(agora)) {
+    avisosLojaFechada.clear();
+  }
 }
 
 /**
@@ -1554,8 +1626,13 @@ async function processarEvento(payload: OpenWAEvent): Promise<void> {
    * Se a mensagem aconteceu ANTES
    * deste webhook ser iniciado,
    * ela nunca entra no sistema.
+   *
+   * Só vale para o OpenWA: a Meta não
+   * acumula eventos pendentes da sessão.
    */
-  if (mensagemAnteriorAoWebhook(payload)) {
+  const eventoMeta = ehChatMeta(data.chatId ?? "");
+
+  if (!eventoMeta && mensagemAnteriorAoWebhook(payload)) {
     console.log(
       [
         "Evento anterior ao início do webhook ignorado.",
