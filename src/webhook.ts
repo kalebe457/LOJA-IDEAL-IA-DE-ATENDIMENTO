@@ -38,6 +38,16 @@ import {
   lojaAberta,
 } from "./horarioFuncionamento.js";
 
+import {
+  definirAoAssumirAtendimento,
+  enviarResumoTelegram,
+  processarUpdateTelegram,
+  reenviarResumosTelegramPendentes,
+  segredoWebhookTelegramValido,
+  telegramConfigurado,
+  type TelegramUpdate,
+} from "./telegramBot.js";
+
 import type { Cliente, ResultadoIA } from "./tipos.js";
 
 /*
@@ -1456,6 +1466,18 @@ async function processarMensagemRecebida(payload: OpenWAEvent): Promise<void> {
         await enviarResumoComRetentativas(conversa);
       }
 
+      /*
+       * Resumo para o grupo de vendedores no Telegram
+       * (idempotente por atendimento).
+       */
+      if (telegramConfigurado()) {
+        await enviarResumoTelegram(
+          conversa.atendimentoId,
+          chatId,
+          conversa.cliente.resumo,
+        );
+      }
+
       console.log(
         `Atendimento transferido para humano: ${mascararChatId(chatId)}`,
       );
@@ -1712,6 +1734,30 @@ export function iniciarWebhook(): void {
    */
   webhookIniciadoEm = Date.now();
 
+  /*
+   * Vendedor venceu o lock no Telegram:
+   * a IA para de responder essa conversa.
+   */
+  definirAoAssumirAtendimento((atendimentoId) => {
+    for (const conversa of conversas.values()) {
+      if (conversa.atendimentoId !== atendimentoId) {
+        continue;
+      }
+
+      conversa.vendedorAssumiu = true;
+
+      conversa.cliente.status = "HUMANO";
+
+      console.log(`Atendimento ${atendimentoId} assumido por vendedor via Telegram.`);
+
+      return;
+    }
+
+    console.log(
+      `Atendimento ${atendimentoId} assumido via Telegram; conversa já encerrada na memória.`,
+    );
+  });
+
   console.log(
     [
       "Webhook aceitará somente mensagens recebidas a partir de:",
@@ -1736,6 +1782,53 @@ export function iniciarWebhook(): void {
        * Webhook da WhatsApp Cloud API (Meta).
        */
       const urlMeta = new URL(request.url ?? "/", "http://localhost");
+
+      /*
+       * Webhook do bot do Telegram (vendedores).
+       */
+      if (urlMeta.pathname === "/telegram/webhook") {
+        if (request.method !== "POST") {
+          responderJson(response, 405, { error: "Method not allowed" });
+
+          return;
+        }
+
+        if (
+          !segredoWebhookTelegramValido(
+            request.headers["x-telegram-bot-api-secret-token"],
+          )
+        ) {
+          responderJson(response, 401, { received: false });
+
+          return;
+        }
+
+        const rawBodyTelegram = await lerCorpo(request);
+
+        let update: TelegramUpdate;
+
+        try {
+          update = JSON.parse(rawBodyTelegram.toString("utf8")) as TelegramUpdate;
+        } catch {
+          responderJson(response, 400, { received: false });
+
+          return;
+        }
+
+        /*
+         * Responde rápido; processa em seguida.
+         */
+        responderJson(response, 200, { received: true });
+
+        processarUpdateTelegram(update).catch((erro: unknown) => {
+          console.error(
+            "Erro ao processar update do Telegram:",
+            erro instanceof Error ? erro.message : "erro desconhecido",
+          );
+        });
+
+        return;
+      }
 
       if (urlMeta.pathname === "/meta/webhook") {
         if (request.method === "GET") {
@@ -1911,6 +2004,8 @@ export function iniciarWebhook(): void {
 
     console.log("Endpoint: POST /openwa/webhook");
 
+    console.log("Endpoint: POST /telegram/webhook");
+
     console.log(
       `Mensagens anteriores a ${new Date(webhookIniciadoEm).toLocaleTimeString(
         "pt-BR",
@@ -1928,6 +2023,15 @@ export function iniciarWebhook(): void {
    * a cada 60 segundos.
    */
   setInterval(reenviarResumosPendentes, 60_000);
+
+  setInterval(() => {
+    reenviarResumosTelegramPendentes().catch((erro: unknown) => {
+      console.error(
+        "Erro ao reenviar resumos do Telegram:",
+        erro instanceof Error ? erro.message : "erro desconhecido",
+      );
+    });
+  }, 60_000);
 
   /*
    * Limpa marcadores de mensagens

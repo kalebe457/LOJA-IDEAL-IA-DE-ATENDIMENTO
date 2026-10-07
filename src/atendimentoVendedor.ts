@@ -113,6 +113,13 @@ export type OpcoesRegistro = {
    * Números canônicos autorizados.
    */
   vendedoresAutorizados?: () => ReadonlySet<string>;
+
+  /*
+   * Forma canônica da identidade do vendedor.
+   * Padrão: número de telefone. A integração do
+   * Telegram usa o user_id.
+   */
+  normalizarVendedor?: (vendedor: unknown) => string;
 };
 
 /**
@@ -183,6 +190,8 @@ export class RegistroAtendimentosVendedor {
 
   private readonly vendedoresAutorizados: () => ReadonlySet<string>;
 
+  private readonly normalizarVendedor: (vendedor: unknown) => string;
+
   constructor(opcoes: OpcoesRegistro = {}) {
     this.ttlPendenteMs = opcoes.ttlPendenteMs ?? TTL_PENDENTE_PADRAO_MS;
 
@@ -194,6 +203,9 @@ export class RegistroAtendimentosVendedor {
 
     this.vendedoresAutorizados =
       opcoes.vendedoresAutorizados ?? lerVendedoresAutorizados;
+
+    this.normalizarVendedor =
+      opcoes.normalizarVendedor ?? normalizarNumeroVendedor;
   }
 
   /**
@@ -269,7 +281,7 @@ export class RegistroAtendimentosVendedor {
     atendimentoId: string,
     vendedor: string | null | undefined,
   ): TentativaAssumir {
-    const numero = normalizarNumeroVendedor(vendedor);
+    const numero = this.normalizarVendedor(vendedor);
 
     /*
      * Autorização ANTES da busca: quem não é
