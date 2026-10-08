@@ -27,7 +27,7 @@ import type { ResumoCliente } from "./tipos.js";
 
 const TELEGRAM_API = "https://api.telegram.org";
 
-const CALLBACK_ASSUMIR = /^assumir:(ATD-[0-9A-F]{6})$/;
+const CALLBACK_ASSUMIR = /^assumir:(ATD-[0-9A-F]{10})$/;
 
 const MENSAGEM_ONBOARDING =
   "Antes de assumir um atendimento, abra @LojaIdealAtendimentoBot no privado e envie /start.";

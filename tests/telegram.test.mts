@@ -54,26 +54,26 @@ await T.processarUpdateTelegram({ update_id: upd++, message: { message_id: 2, ch
 ok(!de("sendMessage").some((c) => c.corpo.chat_id === GRUPO), "/start no GRUPO não registra nem responde");
 
 logReal("\n== Resumo no grupo ==");
-const msgA = await novoResumo("ATD-AAAAAA");
+const msgA = await novoResumo("ATD-0000AAAAAA");
 const envio = de("sendMessage").find((c) => c.corpo.chat_id === "-1009999999999")!;
 const cbData = envio.corpo.reply_markup.inline_keyboard[0][0].callback_data;
 ok(envio.corpo.text.startsWith("📋 NOVO ATENDIMENTO") && /Produto: Cimento CP-II/.test(envio.corpo.text), "resumo no formato pedido");
 ok(!envio.corpo.text.includes("ATD-") && !envio.corpo.text.includes("meta:") && !envio.corpo.text.includes("wa.me"), "resumo sem ATD, chatId ou link");
-ok(cbData === "assumir:ATD-AAAAAA" && Buffer.byteLength(cbData) <= 64, `callback_data "${cbData}" (${Buffer.byteLength(cbData)} bytes, sem dados pessoais)`);
+ok(cbData === "assumir:ATD-0000AAAAAA" && Buffer.byteLength(cbData) <= 64, `callback_data "${cbData}" (${Buffer.byteLength(cbData)} bytes, sem dados pessoais)`);
 
 logReal("\n== 12. Resumo duplicado ==");
 const antes = de("sendMessage").length;
-await T.enviarResumoTelegram("ATD-AAAAAA", "meta:1:5591988887777", resumo());
+await T.enviarResumoTelegram("ATD-0000AAAAAA", "meta:1:5591988887777", resumo());
 ok(de("sendMessage").length === antes, "segundo envio do mesmo atendimento é ignorado");
 
 logReal("\n== 6. Vendedor NÃO registrado tenta assumir ==");
-await clique(ANA, "ATD-AAAAAA", msgA);
+await clique(ANA, "ATD-0000AAAAAA", msgA);
 ok(respostas().at(-1) === "Antes de assumir um atendimento, abra @LojaIdealAtendimentoBot no privado e envie /start.", "responde com a orientação de /start");
 ok(de("editMessageText").length === 0 && humanos.length === 0 && dmsPara(ANA).length === 0, "não editou o grupo, não marcou HUMANO, sem link (lock não adquirido)");
 
 logReal("\n== 4/5. Vendedor registrado assume ==");
-await clique(CARLOS, "ATD-AAAAAA", msgA);
-ok(humanos.join() === "ATD-AAAAAA", "atendimento marcado como HUMANO (gancho chamado uma vez)");
+await clique(CARLOS, "ATD-0000AAAAAA", msgA);
+ok(humanos.join() === "ATD-0000AAAAAA", "atendimento marcado como HUMANO (gancho chamado uma vez)");
 ok(/assumido/i.test(respostas().at(-1)!), `callback respondido: "${respostas().at(-1)}"`);
 const dm = dmsPara(CARLOS);
 ok(dm.length === 1 && dm[0]!.corpo.reply_markup.inline_keyboard[0][0].url === "https://wa.me/5591988887777", "UMA DM ao vencedor com botão URL ABRIR WHATSAPP → https://wa.me/5591988887777");
@@ -86,40 +86,40 @@ ok(de("editMessageText").every((c) => !("reply_markup" in c.corpo)) && !/5591/.t
 
 logReal("\n== 9. Segundo clique do mesmo vendedor ==");
 let total = de("sendMessage").length;
-await clique(CARLOS, "ATD-AAAAAA", msgA);
+await clique(CARLOS, "ATD-0000AAAAAA", msgA);
 ok(respostas().at(-1) === "Você já assumiu este atendimento." && de("sendMessage").length === total, "responde 'você já assumiu' sem nova DM");
 
 logReal("\n== 8. Outro vendedor depois ==");
 await start(MARIA, "Maria");
 total = de("sendMessage").length;
-await clique(MARIA, "ATD-AAAAAA", msgA);
+await clique(MARIA, "ATD-0000AAAAAA", msgA);
 ok(respostas().at(-1) === "Este atendimento já foi assumido por outro vendedor (Carlos).", `responde: "${respostas().at(-1)}"`);
 ok(de("sendMessage").length === total && humanos.length === 1, "sem DM para Maria; responsável e status inalterados");
 
 logReal("\n== 7/8. Dois vendedores ao mesmo tempo ==");
 reset(); await start(CARLOS, "Carlos"); await start(MARIA, "Maria");
-const msgB = await novoResumo("ATD-BBBBBB");
-await Promise.all([clique(CARLOS, "ATD-BBBBBB", msgB), clique(MARIA, "ATD-BBBBBB", msgB)]);
+const msgB = await novoResumo("ATD-0000BBBBBB");
+await Promise.all([clique(CARLOS, "ATD-0000BBBBBB", msgB), clique(MARIA, "ATD-0000BBBBBB", msgB)]);
 const dmsB = de("sendMessage").filter((c) => String(c.corpo.text).startsWith("🔒"));
 ok(dmsB.length === 1 && humanos.length === 1, `exatamente um venceu (DM só para ${dmsB[0]?.corpo.chat_id === CARLOS ? "Carlos" : "Maria"}); o outro recebeu: "${respostas().find((t) => /outro vendedor/.test(t))}"`);
 
 logReal("\n== 11. Callback duplicado ==");
 reset(); await start(CARLOS, "Carlos");
-const msgC = await novoResumo("ATD-CCCCCC");
-await Promise.all([clique(CARLOS, "ATD-CCCCCC", msgC, GRUPO, "cb-repetido"), clique(CARLOS, "ATD-CCCCCC", msgC, GRUPO, "cb-repetido")]);
-await T.processarUpdateTelegram({ update_id: 5000, callback_query: { id: "cb-novo", from: { id: CARLOS }, data: "assumir:ATD-CCCCCC", message: { message_id: msgC, chat: { id: GRUPO } } } });
-await T.processarUpdateTelegram({ update_id: 5000, callback_query: { id: "cb-novo2", from: { id: CARLOS }, data: "assumir:ATD-CCCCCC", message: { message_id: msgC, chat: { id: GRUPO } } } });
+const msgC = await novoResumo("ATD-0000CCCCCC");
+await Promise.all([clique(CARLOS, "ATD-0000CCCCCC", msgC, GRUPO, "cb-repetido"), clique(CARLOS, "ATD-0000CCCCCC", msgC, GRUPO, "cb-repetido")]);
+await T.processarUpdateTelegram({ update_id: 5000, callback_query: { id: "cb-novo", from: { id: CARLOS }, data: "assumir:ATD-0000CCCCCC", message: { message_id: msgC, chat: { id: GRUPO } } } });
+await T.processarUpdateTelegram({ update_id: 5000, callback_query: { id: "cb-novo2", from: { id: CARLOS }, data: "assumir:ATD-0000CCCCCC", message: { message_id: msgC, chat: { id: GRUPO } } } });
 ok(dmsPara(CARLOS).length === 1 && humanos.length === 1 && de("answerCallbackQuery").length === 2, "mesmo callback_query.id e mesmo update_id processados uma vez só; uma DM");
 
 logReal("\n== 10. Atendimento inexistente / clique inválido ==");
-await clique(CARLOS, "ATD-FFFFFF", msgC);
+await clique(CARLOS, "ATD-0000FFFFFF", msgC);
 ok(respostas().at(-1) === "Este atendimento não está mais disponível.", "ATD inexistente → 'não está mais disponível'");
 reset(); await start(CARLOS, "Carlos");
-const msgD = await novoResumo("ATD-DDDDDD");
+const msgD = await novoResumo("ATD-0000DDDDDD");
 chamadas = [];
-await clique(CARLOS, "ATD-DDDDDD", msgD + 999);
+await clique(CARLOS, "ATD-0000DDDDDD", msgD + 999);
 ok(respostas().at(-1) === "Este atendimento não está mais disponível." && humanos.length === 0, "message_id diferente do resumo enviado pelo bot → recusado");
-await clique(CARLOS, "ATD-DDDDDD", msgD, -999);
+await clique(CARLOS, "ATD-0000DDDDDD", msgD, -999);
 ok(respostas().at(-1) === "Este atendimento não está mais disponível." && humanos.length === 0, "callback de outro chat → recusado");
 await T.processarUpdateTelegram({ update_id: upd++, callback_query: { id: "x1", from: { id: CARLOS }, data: "assumir:5591988887777", message: { message_id: msgD, chat: { id: GRUPO } } } });
 ok(humanos.length === 0 && de("sendMessage").length === 0, "callback_data fora do formato → recusado, sem DM");
@@ -129,21 +129,21 @@ ok(T.gerarLinkWhatsApp("+55 (91) 98888-7777") === "https://wa.me/5591988887777",
 ok(T.gerarLinkWhatsApp("559188887777") === "https://wa.me/559188887777", "wa_id sem o 9 → mantido como veio");
 ok(T.gerarLinkWhatsApp("Não informado") === null, "'Não informado' → sem link");
 reset(); await start(CARLOS, "Carlos");
-const msgE = await novoResumo("ATD-EEEEEE", "Não informado");
-await clique(CARLOS, "ATD-EEEEEE", msgE);
+const msgE = await novoResumo("ATD-0000EEEEEE", "Não informado");
+await clique(CARLOS, "ATD-0000EEEEEE", msgE);
 const dmE = dmsPara(CARLOS)[0];
 ok(!!dmE && !dmE.corpo.reply_markup && /indisponível/.test(dmE.corpo.text), "telefone inválido → DM sem botão, com aviso");
 
 logReal("\n== 16. Falha na DM depois do lock ==");
 reset(); await start(CARLOS, "Carlos"); await start(MARIA, "Maria");
-const msgF = await novoResumo("ATD-0F0F0F");
+const msgF = await novoResumo("ATD-00000F0F0F");
 falharDMPara.add(CARLOS);
-await clique(CARLOS, "ATD-0F0F0F", msgF);
+await clique(CARLOS, "ATD-00000F0F0F", msgF);
 const edF = de("editMessageText").at(-1)!;
-ok(humanos.join() === "ATD-0F0F0F", "lock mantido e atendimento HUMANO mesmo com a DM falhando");
+ok(humanos.join() === "ATD-00000F0F0F", "lock mantido e atendimento HUMANO mesmo com a DM falhando");
 ok(/Vendedor: Carlos/.test(edF.corpo.text) && /erro ao enviar a mensagem privada/.test(edF.corpo.text), "grupo avisa que foi assumido e que a DM falhou");
-ok(erros.some((e) => /DM de ATD-0F0F0F NÃO enviada/.test(e)) && !erros.some((e) => e.includes("TOKEN-FALSO")), "erro registrado no log, sem token");
-await clique(MARIA, "ATD-0F0F0F", msgF);
+ok(erros.some((e) => /DM de ATD-00000F0F0F NÃO enviada/.test(e)) && !erros.some((e) => e.includes("TOKEN-FALSO")), "erro registrado no log, sem token");
+await clique(MARIA, "ATD-00000F0F0F", msgF);
 ok(dmsPara(MARIA).length === 0, "Maria clicando depois NÃO recebe o link");
 falharDMPara.clear();
 await start(MARIA, "Maria");

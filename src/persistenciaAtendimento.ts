@@ -1,4 +1,4 @@
-import { consultar, obterConexao } from "./banco.js";
+import { obterConexao } from "./banco.js";
 
 /*
  * Espelho no PostgreSQL da existência dos atendimentos (Passo 5a).
@@ -19,6 +19,12 @@ import { consultar, obterConexao } from "./banco.js";
  * Mesmo formato do CHECK chk_clientes_telefone_digitos.
  */
 const TELEFONE_VALIDO = /^[0-9]{10,15}$/;
+
+/*
+ * Tempo máximo de cada comando do espelho. Banco travado (lock,
+ * lentidão) vira erro e cai no "loga e segue".
+ */
+const STATEMENT_TIMEOUT = "5s";
 
 export type AtividadeAtendimento = {
   /*
@@ -89,6 +95,8 @@ export async function registrarAtividadeAtendimento(
 
     await conexao.query("BEGIN");
 
+    await conexao.query(`SET LOCAL statement_timeout = '${STATEMENT_TIMEOUT}'`);
+
     await conexao.query(
       `UPDATE atendimentos
           SET encerrado_em = now(), atualizado_em = now()
@@ -105,7 +113,12 @@ export async function registrarAtividadeAtendimento(
       [dados.telefone],
     );
 
-    await conexao.query(
+    /*
+     * Só atualiza a linha existente se ela for do MESMO chat_id.
+     * Colisão de codigo com outro chat: nada é retornado e a
+     * transação inteira é desfeita (a linha alheia fica intacta).
+     */
+    const atendimento = await conexao.query(
       `INSERT INTO atendimentos
          (codigo, cliente_id, status, canal, chat_id, ultima_atividade_em, encerrado_em)
        VALUES
@@ -116,9 +129,21 @@ export async function registrarAtividadeAtendimento(
          encerrado_em = CASE WHEN $5::boolean
                              THEN COALESCE(atendimentos.encerrado_em, now())
                              ELSE atendimentos.encerrado_em END,
-         atualizado_em = now()`,
+         atualizado_em = now()
+       WHERE atendimentos.chat_id = EXCLUDED.chat_id
+       RETURNING id`,
       [dados.codigo, cliente.rows[0]?.id, dados.chatId, dados.atividadeEm, dados.encerrado],
     );
+
+    if (atendimento.rowCount !== 1) {
+      await conexao.query("ROLLBACK");
+
+      console.error(
+        `[Persistência] colisão de codigo ${dados.codigo}: já existe em outro chat; nada alterado.`,
+      );
+
+      return false;
+    }
 
     await conexao.query("COMMIT");
 
@@ -144,20 +169,36 @@ export async function registrarAtividadeAtendimento(
  * Idempotente: só altera se ainda estiver aberto.
  */
 export async function registrarEncerramentoAtendimento(codigo: string): Promise<boolean> {
+  let conexao: Awaited<ReturnType<typeof obterConexao>> | null = null;
+
   try {
-    await consultar(
+    conexao = await obterConexao();
+
+    await conexao.query("BEGIN");
+
+    await conexao.query(`SET LOCAL statement_timeout = '${STATEMENT_TIMEOUT}'`);
+
+    await conexao.query(
       `UPDATE atendimentos
           SET encerrado_em = now(), atualizado_em = now()
         WHERE codigo = $1 AND encerrado_em IS NULL`,
       [codigo],
     );
 
+    await conexao.query("COMMIT");
+
     return true;
   } catch (erro: unknown) {
+    if (conexao) {
+      await conexao.query("ROLLBACK").catch(() => undefined);
+    }
+
     console.error(
       `[Persistência] falha ao registrar encerramento do atendimento ${codigo} (${descreverErro(erro)}).`,
     );
 
     return false;
+  } finally {
+    conexao?.release();
   }
 }

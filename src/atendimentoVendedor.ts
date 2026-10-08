@@ -424,7 +424,7 @@ export class RegistroAtendimentosVendedor {
      * só é registrado se tiver o formato esperado.
      */
     const idSeguro =
-      typeof atendimentoId === "string" && /^ATD-[0-9A-F]{6}$/.test(atendimentoId)
+      typeof atendimentoId === "string" && /^ATD-[0-9A-F]{10}$/.test(atendimentoId)
         ? atendimentoId
         : "formato inválido";
 

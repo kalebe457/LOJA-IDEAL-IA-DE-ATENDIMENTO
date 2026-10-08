@@ -88,7 +88,7 @@ const linhas = async (tel: string): Promise<Linha[]> => (await banco.consultar(
 const codigoEmMemoria = (tel: string) => {
   const final = tel.slice(-4);
   const l = [...logs].reverse().find((x) => x.startsWith("Mensagem recebida (Meta)") && x.includes(`****${final}`));
-  return /atendimento: (ATD-[0-9A-F]{6})/.exec(l ?? "")?.[1] ?? "";
+  return /atendimento: (ATD-[0-9A-F]{10})/.exec(l ?? "")?.[1] ?? "";
 };
 
 // Segurança: nada com o prefixo de teste antes de começar.
@@ -181,6 +181,36 @@ const primeira = await mensagem(TEL_A, "repetida");
 await mensagem(TEL_A, "repetida", primeira.wamid);
 ok((await linhas(TEL_A)).length === antesDup && chamadasClaude === c9 + 1, "o mesmo wamid não cria atendimento novo nem processa de novo");
 
+out("\n== 5a.1: colisão de codigo com outro chat_id ==");
+const TEL_E = "5591900000505", TEL_F = "5591900000506", TEL_G = "5591900000507";
+const espelhoMod = await import(B + "/src/persistenciaAtendimento.ts");
+const cliE = (await banco.consultar("INSERT INTO clientes (telefone) VALUES ($1) ON CONFLICT (telefone) DO UPDATE SET telefone = EXCLUDED.telefone RETURNING id", [TEL_E])).rows[0].id;
+await banco.consultar("INSERT INTO atendimentos (codigo, cliente_id, status, canal, chat_id) VALUES ('ATD-TESTE5A001', $1, 'IA', 'META', $2)", [cliE, chat(TEL_E)]);
+const antesColisao = (await linhas(TEL_E))[0]!;
+const resColisao = await espelhoMod.registrarAtividadeAtendimento({ codigo: "ATD-TESTE5A001", chatId: chat(TEL_F), telefone: TEL_F, atividadeEm: Date.now() + 60_000, encerrado: true });
+const depoisColisao = (await linhas(TEL_E))[0]!;
+const clienteF = Number((await banco.consultar("SELECT count(*) n FROM clientes WHERE telefone = $1", [TEL_F])).rows[0].n);
+ok(resColisao === false && logs.some((l) => l.includes("colisão de codigo ATD-TESTE5A001")), "colisão detectada e logada (retorno false)");
+ok(depoisColisao.chat_id === chat(TEL_E) && depoisColisao.encerrado_em === null && depoisColisao.ultima_atividade_em.getTime() === antesColisao.ultima_atividade_em.getTime(),
+  "linha existente (outro chat_id) NÃO foi sobrescrita: chat_id, atividade e encerramento intactos");
+ok((await linhas(TEL_F)).length === 0 && clienteF === 0, "nada criado para o outro chat (transação desfeita, nem o cliente)");
+
+out("\n== 5a.1: banco travado (statement_timeout de 5 s) ==");
+await banco.consultar("INSERT INTO clientes (telefone) VALUES ($1) ON CONFLICT (telefone) DO NOTHING", [TEL_G]);
+const trava = await banco.obterConexao();
+await trava.query("BEGIN");
+await trava.query("SELECT id FROM clientes WHERE telefone = $1 FOR UPDATE", [TEL_G]); // o espelho vai esperar este lock
+const cG = chamadasClaude;
+const t0 = Date.now();
+await mensagem(TEL_G, "oi");
+for (let i = 0; i < 40 && chamadasClaude === cG; i++) await espera(250);
+const decorrido = Date.now() - t0;
+await trava.query("ROLLBACK");
+trava.release();
+ok(chamadasClaude === cG + 1 && decorrido >= 4_500 && decorrido < 9_000, `espelho travado foi cancelado e a triagem seguiu (Claude chamado após ${(decorrido / 1000).toFixed(1)} s)`);
+ok(logs.some((l) => l.includes("[Persistência] falha ao registrar atividade") && l.includes("57014")), "cancelamento por statement_timeout logado (57014), sem segredo");
+ok((await linhas(TEL_G)).length === 0, "nenhuma linha meio gravada (transação desfeita)");
+
 ok(externas.length === 0, `nenhuma chamada de rede externa (${externas.length})`);
 
 out("\n== Limpeza ==");
@@ -188,7 +218,9 @@ await espera(500);
 const ev = (await banco.consultar("DELETE FROM eventos_processados WHERE mensagem_externa_id LIKE 'teste-5a-%'")).rowCount;
 const { limparEspelhoDeTeste } = await import(B + "/tests/limpeza-espelho.mts");
 const espelho = await limparEspelhoDeTeste(banco.consultar);
-const sobra = Number((await banco.consultar("SELECT count(*) n FROM clientes WHERE telefone IN ($1,$2,$3,$4)", [TEL_A, TEL_B, TEL_C, TEL_D])).rows[0].n);
+// Clientes criados direto pelo teste e que ficaram sem atendimento.
+await banco.consultar("DELETE FROM clientes WHERE telefone = ANY($1::varchar[]) AND NOT EXISTS (SELECT 1 FROM atendimentos a WHERE a.cliente_id = clientes.id)", [[TEL_E, TEL_F, TEL_G]]);
+const sobra = Number((await banco.consultar("SELECT count(*) n FROM clientes WHERE telefone = ANY($1::varchar[])", [[TEL_A, TEL_B, TEL_C, TEL_D, TEL_E, TEL_F, TEL_G]])).rows[0].n);
 ok(espelho.restantes === 0 && sobra === 0, `apagados: ${ev} eventos, ${espelho.atendimentos} atendimentos, ${espelho.clientes} clientes; restantes = ${espelho.restantes + sobra}`);
 await banco.encerrarBanco();
 

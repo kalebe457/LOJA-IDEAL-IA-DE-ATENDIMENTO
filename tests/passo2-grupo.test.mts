@@ -78,47 +78,47 @@ for (const st of ["ERRO", "REDE", "INESPERADO"]) {
 logReal("\n== ASSUMIR: autorizados seguem para o lock, com getChatMember ANTES ==");
 for (const st of ["member", "administrator", "creator"]) {
   reset(); statusPorUsuario.set(40, st); await start(40);
-  const msg = await resumo("ATD-AAAAAA");
+  const msg = await resumo("ATD-0000AAAAAA");
   const antes = chamadas.length;
-  await clique(40, "ATD-AAAAAA", msg);
+  await clique(40, "ATD-0000AAAAAA", msg);
   const seq = chamadas.slice(antes).map((c) => c.metodo);
-  ok(seq[0] === "getChatMember" && humanos.join() === "ATD-AAAAAA" && dmsPara(40).length === 1, `"${st}" → ${seq.join(" → ")}`);
+  ok(seq[0] === "getChatMember" && humanos.join() === "ATD-0000AAAAAA" && dmsPara(40).length === 1, `"${st}" → ${seq.join(" → ")}`);
 }
 
 logReal("\n== ASSUMIR: fora da equipe é rejeitado antes do lock ==");
 for (const st of ["restricted", "left", "kicked"]) {
   reset(); statusPorUsuario.set(50, "member"); await start(50);
-  const msg = await resumo("ATD-BBBBBB");
+  const msg = await resumo("ATD-0000BBBBBB");
   statusPorUsuario.set(50, st); // removido/restrito DEPOIS do /start
   const antes = chamadas.length;
-  await clique(50, "ATD-BBBBBB", msg);
+  await clique(50, "ATD-0000BBBBBB", msg);
   const seq = chamadas.slice(antes).map((c) => c.metodo).join(" → ");
   ok(ultimaResposta()?.text === FORA && ultimaResposta()?.show_alert === true && intacto() && seq === "getChatMember → answerCallbackQuery",
     `membro que virou "${st}" após o /start → mensagem exata, atendimento intacto (${seq})`);
 }
 reset(); statusPorUsuario.set(50, "member"); statusPorUsuario.set(51, "member"); await start(50); await start(51);
-const msgR = await resumo("ATD-0B0B0B");
+const msgR = await resumo("ATD-00000B0B0B");
 statusPorUsuario.set(50, "kicked");
-await clique(50, "ATD-0B0B0B", msgR);
-await clique(51, "ATD-0B0B0B", msgR);
-ok(humanos.join() === "ATD-0B0B0B" && dmsPara(51).length === 1 && dmsPara(50).length === 0, "depois da rejeição, um membro assume normalmente (atendimento estava intacto)");
+await clique(50, "ATD-00000B0B0B", msgR);
+await clique(51, "ATD-00000B0B0B", msgR);
+ok(humanos.join() === "ATD-00000B0B0B" && dmsPara(51).length === 1 && dmsPara(50).length === 0, "depois da rejeição, um membro assume normalmente (atendimento estava intacto)");
 
 logReal("\n== ASSUMIR: erro técnico não libera ==");
 for (const st of ["ERRO", "REDE", "INESPERADO"]) {
   reset(); statusPorUsuario.set(60, "member"); await start(60);
-  const msg = await resumo("ATD-CCCCCC");
+  const msg = await resumo("ATD-0000CCCCCC");
   statusPorUsuario.set(60, st);
-  await clique(60, "ATD-CCCCCC", msg);
+  await clique(60, "ATD-0000CCCCCC", msg);
   ok(ultimaResposta()?.text === ERRO_MSG && ultimaResposta()?.show_alert === true && intacto(), `${st} → mensagem exata de verificação, sem lock, sem DM, atendimento intacto`);
 }
 reset(); statusPorUsuario.set(61, "member"); await start(61);
-const msgT = await resumo("ATD-0C0C0C");
+const msgT = await resumo("ATD-00000C0C0C");
 statusPorUsuario.set(61, "TRAVA");
 // O timer de AbortSignal.timeout é unref: no backend real o servidor HTTP mantém o
 // processo vivo; aqui um intervalo faz esse papel durante o teste.
 const manterVivo = setInterval(() => undefined, 1_000);
 const t0 = Date.now();
-await clique(61, "ATD-0C0C0C", msgT);
+await clique(61, "ATD-00000C0C0C", msgT);
 const dt = Date.now() - t0;
 clearInterval(manterVivo);
 ok(ultimaResposta()?.text === ERRO_MSG && intacto() && dt >= 4_500 && dt < 8_000, `timeout: API presa → callback respondido em ${(dt / 1000).toFixed(1)} s com a mensagem de verificação (não fica travado)`);
@@ -127,18 +127,18 @@ logReal("\n== Registro ==");
 reset(); statusPorUsuario.set(70, "member"); await start(70);
 statusPorUsuario.set(70, "left"); await start(70);
 statusPorUsuario.set(70, "member");
-const msgG = await resumo("ATD-0A0A0A");
-await clique(70, "ATD-0A0A0A", msgG);
+const msgG = await resumo("ATD-00000A0A0A");
+await clique(70, "ATD-00000A0A0A", msgG);
 ok(ultimaResposta()?.text.startsWith("Antes de assumir um atendimento") && humanos.length === 0, "/start rejeitado (fora da equipe) remove o registro anterior");
 reset(); statusPorUsuario.set(71, "member"); await start(71);
 statusPorUsuario.set(71, "ERRO"); await start(71);
 statusPorUsuario.set(71, "member");
-const msgH = await resumo("ATD-0D0D0D");
-await clique(71, "ATD-0D0D0D", msgH);
-ok(humanos.join() === "ATD-0D0D0D", "/start com erro técnico NÃO apaga o registro anterior (não dá para saber)");
+const msgH = await resumo("ATD-00000D0D0D");
+await clique(71, "ATD-00000D0D0D", msgH);
+ok(humanos.join() === "ATD-00000D0D0D", "/start com erro técnico NÃO apaga o registro anterior (não dá para saber)");
 reset(); statusPorUsuario.set(72, "member");
-const msgF = await resumo("ATD-0F0F0F");
-await clique(72, "ATD-0F0F0F", msgF);
+const msgF = await resumo("ATD-00000F0F0F");
+await clique(72, "ATD-00000F0F0F", msgF);
 ok(ultimaResposta()?.text === "Antes de assumir um atendimento, abra @LojaIdealAtendimentoBot no privado e envie /start." && humanos.length === 0,
   "no grupo mas sem /start → orientação de /start no privado, sem lock");
 

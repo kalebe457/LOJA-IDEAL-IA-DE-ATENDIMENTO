@@ -175,7 +175,11 @@ export type EventoMensagem = {
  * Gera um ID curto para controle interno.
  */
 function gerarAtendimentoId(): string {
-  return "ATD-" + randomBytes(3).toString("hex").toUpperCase();
+  /*
+   * ATD- + 10 hexadecimais (40 bits): colisão de codigo
+   * praticamente impossível.
+   */
+  return "ATD-" + randomBytes(5).toString("hex").toUpperCase();
 }
 
 /**

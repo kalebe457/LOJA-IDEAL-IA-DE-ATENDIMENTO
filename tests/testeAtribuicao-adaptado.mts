@@ -35,24 +35,24 @@ const jitter = () => new Promise<void>((res) => (Math.random() < 0.5 ? setTimeou
 
 out("### Concorrência");
 {
-  const reg = novo(); reg.registrarPendente("ATD-000001", "meta:P:5591900000001");
-  const rs = await Promise.all(VENDEDORES.slice(0, 2).map(async (v) => reg.tentarAssumir("ATD-000001", v)));
+  const reg = novo(); reg.registrarPendente("ATD-0000000001", "meta:P:5591900000001");
+  const rs = await Promise.all(VENDEDORES.slice(0, 2).map(async (v) => reg.tentarAssumir("ATD-0000000001", v)));
   ok(contar(rs, R.ASSUMIDO) === 1 && contar(rs, R.JA_ASSUMIDO_POR_OUTRO) === 1, `T1 2 vendedores: ${rs.map((r) => r.resultado).join(", ")}`);
 }
 {
-  const reg = novo(); reg.registrarPendente("ATD-000002", "meta:P:5591900000002");
-  const rs = await Promise.all(VENDEDORES.map(async (v) => reg.tentarAssumir("ATD-000002", v)));
+  const reg = novo(); reg.registrarPendente("ATD-0000000002", "meta:P:5591900000002");
+  const rs = await Promise.all(VENDEDORES.map(async (v) => reg.tentarAssumir("ATD-0000000002", v)));
   const iv = rs.findIndex((r) => r.resultado === R.ASSUMIDO);
-  ok(contar(rs, R.ASSUMIDO) === 1 && contar(rs, R.JA_ASSUMIDO_POR_OUTRO) === 9 && reg.obter("ATD-000002")?.responsavel === VENDEDORES[iv],
+  ok(contar(rs, R.ASSUMIDO) === 1 && contar(rs, R.JA_ASSUMIDO_POR_OUTRO) === 9 && reg.obter("ATD-0000000002")?.responsavel === VENDEDORES[iv],
     `T2 10 vendedores: 1 assumido, ${contar(rs, R.JA_ASSUMIDO_POR_OUTRO)} por outro, responsável = vencedor`);
 }
 {
   let todasCertas = true; const vencedores = new Set<string>();
   for (let rep = 0; rep < 50; rep++) {
-    const reg = novo(); reg.registrarPendente("ATD-000003", "meta:P:5591900000003");
-    const rs = await Promise.all(VENDEDORES.map(async (v) => { await jitter(); await jitter(); return { v, r: reg.tentarAssumir("ATD-000003", v) }; }));
+    const reg = novo(); reg.registrarPendente("ATD-0000000003", "meta:P:5591900000003");
+    const rs = await Promise.all(VENDEDORES.map(async (v) => { await jitter(); await jitter(); return { v, r: reg.tentarAssumir("ATD-0000000003", v) }; }));
     const ganhos = rs.filter((x) => x.r.resultado === R.ASSUMIDO);
-    if (ganhos.length !== 1 || reg.obter("ATD-000003")?.responsavel !== ganhos[0]!.v) todasCertas = false;
+    if (ganhos.length !== 1 || reg.obter("ATD-0000000003")?.responsavel !== ganhos[0]!.v) todasCertas = false;
     if (ganhos[0]) vencedores.add(ganhos[0].v);
   }
   ok(todasCertas, `T2b 50 repetições com atrasos aleatórios: sempre exatamente 1 vencedor (vencedores distintos: ${vencedores.size})`);
@@ -65,10 +65,10 @@ out("### Concorrência");
   ok(n > 1, `CONTROLE com await no meio: ${n} "vencedores" (o teste detecta a corrida quando ela existe)`);
 }
 {
-  const reg = novo(); reg.registrarPendente("ATD-00000A", "c:A"); reg.registrarPendente("ATD-00000B", "c:B");
+  const reg = novo(); reg.registrarPendente("ATD-000000000A", "c:A"); reg.registrarPendente("ATD-000000000B", "c:B");
   const rs = await Promise.all(VENDEDORES.flatMap((v) => [
-    (async () => { await jitter(); return { id: "A", r: reg.tentarAssumir("ATD-00000A", v) }; })(),
-    (async () => { await jitter(); return { id: "B", r: reg.tentarAssumir("ATD-00000B", v) }; })(),
+    (async () => { await jitter(); return { id: "A", r: reg.tentarAssumir("ATD-000000000A", v) }; })(),
+    (async () => { await jitter(); return { id: "B", r: reg.tentarAssumir("ATD-000000000B", v) }; })(),
   ]));
   const a = rs.filter((x) => x.id === "A" && x.r.resultado === R.ASSUMIDO).length;
   const b = rs.filter((x) => x.id === "B" && x.r.resultado === R.ASSUMIDO).length;
@@ -77,36 +77,36 @@ out("### Concorrência");
 
 out("\n### Regras de resultado");
 {
-  const reg = novo(); reg.registrarPendente("ATD-000010", "c:10");
-  const r1 = reg.tentarAssumir("ATD-000010", VENDEDORES[0]); const r2 = reg.tentarAssumir("ATD-000010", VENDEDORES[0]);
+  const reg = novo(); reg.registrarPendente("ATD-0000000010", "c:10");
+  const r1 = reg.tentarAssumir("ATD-0000000010", VENDEDORES[0]); const r2 = reg.tentarAssumir("ATD-0000000010", VENDEDORES[0]);
   ok(r1.resultado === R.ASSUMIDO && r2.resultado === R.JA_ASSUMIDO_POR_VOCE, `T3 mesmo vendedor 2x: ${r1.resultado}, ${r2.resultado}`);
-  const r4 = reg.tentarAssumir("ATD-000010", VENDEDORES[1]);
-  ok(r4.resultado === R.JA_ASSUMIDO_POR_OUTRO && !("chatId" in r4) && reg.obter("ATD-000010")?.responsavel === VENDEDORES[0],
+  const r4 = reg.tentarAssumir("ATD-0000000010", VENDEDORES[1]);
+  ok(r4.resultado === R.JA_ASSUMIDO_POR_OUTRO && !("chatId" in r4) && reg.obter("ATD-0000000010")?.responsavel === VENDEDORES[0],
     `T4 segundo vendedor: ${r4.resultado}, sem chatId no retorno, responsável inalterado`);
 }
 {
-  const reg = novo(); reg.registrarPendente("ATD-000011", "c:11");
+  const reg = novo(); reg.registrarPendente("ATD-0000000011", "c:11");
   const intruso = "123456789";
-  const a = reg.tentarAssumir("ATD-000011", intruso); const b = reg.tentarAssumir("ATD-FFFFFF", intruso);
-  ok(a.resultado === R.VENDEDOR_NAO_AUTORIZADO && b.resultado === R.VENDEDOR_NAO_AUTORIZADO && reg.obter("ATD-000011")?.estado === E.PENDENTE,
+  const a = reg.tentarAssumir("ATD-0000000011", intruso); const b = reg.tentarAssumir("ATD-0000FFFFFF", intruso);
+  ok(a.resultado === R.VENDEDOR_NAO_AUTORIZADO && b.resultado === R.VENDEDOR_NAO_AUTORIZADO && reg.obter("ATD-0000000011")?.estado === E.PENDENTE,
     `T5 não autorizado: existente=${a.resultado}, inexistente=${b.resultado} (não revela se existe), estado continua pendente`);
-  const c = reg.tentarAssumir("ATD-000011", ""), d = reg.tentarAssumir("ATD-000011", undefined), e = reg.tentarAssumir("ATD-000011", null);
+  const c = reg.tentarAssumir("ATD-0000000011", ""), d = reg.tentarAssumir("ATD-0000000011", undefined), e = reg.tentarAssumir("ATD-0000000011", null);
   ok([c, d, e].every((x) => x.resultado === R.VENDEDOR_NAO_AUTORIZADO), `vendedor vazio/undefined/null: ${c.resultado}, ${d.resultado}, ${e.resultado}`);
-  ok(reg.tentarAssumir("ATD-ABCDEF", VENDEDORES[0]).resultado === R.INEXISTENTE_OU_EXPIRADO, "T6 atendimento inexistente: inexistente_ou_expirado");
+  ok(reg.tentarAssumir("ATD-0000ABCDEF", VENDEDORES[0]).resultado === R.INEXISTENTE_OU_EXPIRADO, "T6 atendimento inexistente: inexistente_ou_expirado");
 }
 
 out("\n### Expiração (relógio injetável, TTLs configuráveis)");
 {
   agora = 1_000_000;
   const reg = novo({ ttlPendenteMs: 2 * H, ttlAssumidoMs: 5 * H });
-  reg.registrarPendente("ATD-000020", "c:20");
-  agora += 2 * H - 1; const vivo = reg.obter("ATD-000020") !== null;
-  agora += 1; const r = reg.tentarAssumir("ATD-000020", VENDEDORES[0]);
+  reg.registrarPendente("ATD-0000000020", "c:20");
+  agora += 2 * H - 1; const vivo = reg.obter("ATD-0000000020") !== null;
+  agora += 1; const r = reg.tentarAssumir("ATD-0000000020", VENDEDORES[0]);
   ok(vivo && r.resultado === R.INEXISTENTE_OU_EXPIRADO && reg.tamanho() === 0, `T7 pendente: válido em 2h-1ms, expirado em 2h (${r.resultado}), entrada removida`);
-  agora = 1_000_000; reg.registrarPendente("ATD-000021", "c:21");
-  agora += 1 * H; reg.tentarAssumir("ATD-000021", VENDEDORES[0]);
-  agora += 5 * H - 1; const dentro = reg.tentarAssumir("ATD-000021", VENDEDORES[1]);
-  agora += 1; const fora = reg.tentarAssumir("ATD-000021", VENDEDORES[1]);
+  agora = 1_000_000; reg.registrarPendente("ATD-0000000021", "c:21");
+  agora += 1 * H; reg.tentarAssumir("ATD-0000000021", VENDEDORES[0]);
+  agora += 5 * H - 1; const dentro = reg.tentarAssumir("ATD-0000000021", VENDEDORES[1]);
+  agora += 1; const fora = reg.tentarAssumir("ATD-0000000021", VENDEDORES[1]);
   ok(dentro.resultado === R.JA_ASSUMIDO_POR_OUTRO && fora.resultado === R.INEXISTENTE_OU_EXPIRADO,
     `T7b assumido: dentro do TTL (conta de assumidoEm) = ${dentro.resultado}, fora = ${fora.resultado}`);
 }
@@ -114,38 +114,38 @@ out("\n### Expiração (relógio injetável, TTLs configuráveis)");
 out("\n### Registro, cópia, índice por chatId e teto");
 {
   agora = 1_000_000; const reg = novo();
-  reg.registrarPendente("ATD-000030", "c:30"); reg.tentarAssumir("ATD-000030", VENDEDORES[2]);
-  const repetido = reg.registrarPendente("ATD-000030", "c:30");
-  ok(repetido === false && reg.obter("ATD-000030")?.responsavel === VENDEDORES[2], "T9 registrar de novo depois de assumido: nada muda");
-  const copia = reg.obter("ATD-000030")!;
+  reg.registrarPendente("ATD-0000000030", "c:30"); reg.tentarAssumir("ATD-0000000030", VENDEDORES[2]);
+  const repetido = reg.registrarPendente("ATD-0000000030", "c:30");
+  ok(repetido === false && reg.obter("ATD-0000000030")?.responsavel === VENDEDORES[2], "T9 registrar de novo depois de assumido: nada muda");
+  const copia = reg.obter("ATD-0000000030")!;
   copia.responsavel = "999"; copia.estado = E.PENDENTE; copia.chatId = "x";
-  const real = reg.obter("ATD-000030")!;
+  const real = reg.obter("ATD-0000000030")!;
   ok(real.responsavel === VENDEDORES[2] && real.estado === E.ASSUMIDO && real.chatId === "c:30", "obter() devolve cópia: alterar o retorno não muda o estado");
   const n0 = reg.tamanho();
-  const v1 = reg.registrarPendente("", "c:x"), v2 = reg.registrarPendente("ATD-000031", ""), v3 = reg.registrarPendente(undefined as never, undefined as never);
+  const v1 = reg.registrarPendente("", "c:x"), v2 = reg.registrarPendente("ATD-0000000031", ""), v3 = reg.registrarPendente(undefined as never, undefined as never);
   ok(!v1 && !v2 && !v3 && reg.tamanho() === n0, "registrarPendente com atendimentoId/chatId vazio: rejeitado, sem lançar erro, sem criar entrada");
 }
 {
   agora = 1_000_000; const reg = novo({ ttlPendenteMs: 1 * H, ttlAssumidoMs: 1 * H, maxItens: 3 });
-  reg.registrarPendente("ATD-000040", "chat:1");
+  reg.registrarPendente("ATD-0000000040", "chat:1");
   const pend = reg.chatTemAtendimentoAtivo("chat:1");
-  reg.tentarAssumir("ATD-000040", VENDEDORES[0]);
+  reg.tentarAssumir("ATD-0000000040", VENDEDORES[0]);
   const assum = reg.chatTemAtendimentoAtivo("chat:1");
   const outro = reg.chatTemAtendimentoAtivo("chat:nenhum");
   agora += 1 * H; const expirou = reg.chatTemAtendimentoAtivo("chat:1");
   ok(pend && assum && !outro && !expirou, `índice por chatId: pendente=${pend}, assumido=${assum}, chat sem atendimento=${outro}, depois de expirar=${expirou}`);
   agora = 5_000_000;
-  reg.registrarPendente("ATD-000041", "chat:2"); reg.registrarPendente("ATD-000042", "chat:3");
-  reg.registrarPendente("ATD-000043", "chat:3"); reg.registrarPendente("ATD-000044", "chat:4");
-  ok(reg.tamanho() === 3 && reg.obter("ATD-000041") === null && !reg.chatTemAtendimentoAtivo("chat:2") && reg.chatTemAtendimentoAtivo("chat:3") && reg.chatTemAtendimentoAtivo("chat:4"),
+  reg.registrarPendente("ATD-0000000041", "chat:2"); reg.registrarPendente("ATD-0000000042", "chat:3");
+  reg.registrarPendente("ATD-0000000043", "chat:3"); reg.registrarPendente("ATD-0000000044", "chat:4");
+  ok(reg.tamanho() === 3 && reg.obter("ATD-0000000041") === null && !reg.chatTemAtendimentoAtivo("chat:2") && reg.chatTemAtendimentoAtivo("chat:3") && reg.chatTemAtendimentoAtivo("chat:4"),
     "T10 teto 3 com 4 registros: o mais antigo sai do registro e do índice; chat com 2 atendimentos continua ativo");
 }
 
 out("\n### Logs (T13)");
 {
-  const reg = novo(); reg.registrarPendente("ATD-000060", "meta:PNID:5591900000060");
-  reg.tentarAssumir("ATD-000060", VENDEDORES[3]); reg.tentarAssumir("<script>alert(1)</script>", VENDEDORES[3]);
-  const tentativa = logs.find((l) => l.includes("ATD-000060") && l.includes("resultado: assumido")) ?? "";
+  const reg = novo(); reg.registrarPendente("ATD-0000000060", "meta:PNID:5591900000060");
+  reg.tentarAssumir("ATD-0000000060", VENDEDORES[3]); reg.tentarAssumir("<script>alert(1)</script>", VENDEDORES[3]);
+  const tentativa = logs.find((l) => l.includes("ATD-0000000060") && l.includes("resultado: assumido")) ?? "";
   ok(tentativa.includes("vendedor: 9000****0003"), `formato: ${tentativa.replace(/^log: /, "")}`);
   ok(logs.some((l) => l.includes("atendimento: formato inválido")) && !logs.some((l) => l.includes("<script>")), "atendimentoId fora do formato não é reproduzido no log");
   const ids = [...VENDEDORES, "5591900000060", "123456789"];
@@ -155,26 +155,26 @@ out("\n### Logs (T13)");
 
 out("\n### NOVOS para a API atual");
 {
-  const reg = novo(); reg.registrarPendente("ATD-000070", "c:70");
-  const a = reg.tentarAssumir("ATD-000070", Number(VENDEDORES[4])); const b = reg.tentarAssumir("ATD-000070", VENDEDORES[4]);
-  ok(a.resultado === R.ASSUMIDO && b.resultado === R.JA_ASSUMIDO_POR_VOCE && reg.obter("ATD-000070")?.responsavel === VENDEDORES[4],
+  const reg = novo(); reg.registrarPendente("ATD-0000000070", "c:70");
+  const a = reg.tentarAssumir("ATD-0000000070", Number(VENDEDORES[4])); const b = reg.tentarAssumir("ATD-0000000070", VENDEDORES[4]);
+  ok(a.resultado === R.ASSUMIDO && b.resultado === R.JA_ASSUMIDO_POR_VOCE && reg.obter("ATD-0000000070")?.responsavel === VENDEDORES[4],
     `N1 mesma identidade como number e string = mesmo vendedor (substitui T3b): ${a.resultado}, ${b.resultado}`);
 }
 {
   const dinamico = new Set(VENDEDORES);
   const reg = new RegistroAtendimentosVendedor({ agora: () => agora, vendedoresAutorizados: () => dinamico, normalizarVendedor: norm });
-  reg.registrarPendente("ATD-000071", "c:71");
+  reg.registrarPendente("ATD-0000000071", "c:71");
   dinamico.delete(VENDEDORES[5]!);
-  const r = reg.tentarAssumir("ATD-000071", VENDEDORES[5]);
-  const s = reg.tentarAssumir("ATD-000071", VENDEDORES[6]);
+  const r = reg.tentarAssumir("ATD-0000000071", VENDEDORES[5]);
+  const s = reg.tentarAssumir("ATD-0000000071", VENDEDORES[6]);
   ok(r.resultado === R.VENDEDOR_NAO_AUTORIZADO && s.resultado === R.ASSUMIDO,
     `N2 autorização lida a cada tentativa: removido do conjunto = ${r.resultado}; outro autorizado = ${s.resultado} (substitui T11)`);
 }
 {
-  const reg = novo(); reg.registrarPendente("ATD-000072", "c:72");
+  const reg = novo(); reg.registrarPendente("ATD-0000000072", "c:72");
   const invalidos = ["12a", "-1", "1.5", " 900000007", "+900000007", 0, -5, 1.5];
-  const rs = invalidos.map((v) => reg.tentarAssumir("ATD-000072", v as never).resultado);
-  ok(rs.every((x) => x === R.VENDEDOR_NAO_AUTORIZADO) && reg.obter("ATD-000072")?.estado === E.PENDENTE,
+  const rs = invalidos.map((v) => reg.tentarAssumir("ATD-0000000072", v as never).resultado);
+  ok(rs.every((x) => x === R.VENDEDOR_NAO_AUTORIZADO) && reg.obter("ATD-0000000072")?.estado === E.PENDENTE,
     `N3 identidades malformadas rejeitadas pelo normalizador e atendimento intacto (substitui T12): ${invalidos.length} casos`);
 }
 
