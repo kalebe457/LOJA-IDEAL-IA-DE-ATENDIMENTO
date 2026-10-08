@@ -4,17 +4,18 @@ import "dotenv/config";
  * Configuração da integração dos vendedores pelo Telegram.
  *
  * Lida do .env no PRIMEIRO uso e guardada: alterar
- * TELEGRAM_RESUMO_TTL_HORAS ou TELEGRAM_VENDEDORES_AUTORIZADOS
- * exige REINICIAR o backend.
+ * TELEGRAM_RESUMO_TTL_HORAS exige REINICIAR o backend.
  *
  * Importar este módulo não lê nem valida nada.
+ *
+ * Quem pode atuar como vendedor NÃO é configurado aqui:
+ * a fonte de verdade é a participação no grupo do Telegram
+ * (getChatMember, em telegramBot.ts).
  */
 
 const TTL_MAXIMO_HORAS = 720;
 
 let ttlHoras: number | null = null;
-
-let vendedoresAutorizados: ReadonlySet<string> | null = null;
 
 /**
  * TELEGRAM_RESUMO_TTL_HORAS: validade do resumo do Telegram,
@@ -57,57 +58,8 @@ export function lerTelegramResumoTtlHoras(): number {
 }
 
 /**
- * TELEGRAM_VENDEDORES_AUTORIZADOS: user_ids do Telegram
- * separados por vírgula.
- *
- * Os IDs ficam como STRING (nunca Number): o PostgreSQL devolve
- * BIGINT como string e IDs do Telegram podem passar de 32 bits.
- *
- * Espaços externos são removidos e entradas vazias ignoradas.
- * Entrada que não seja só dígitos gera erro (citando a posição,
- * não o valor). Variável ausente ou vazia: ninguém autorizado.
- */
-export function lerTelegramVendedoresAutorizados(): ReadonlySet<string> {
-  if (vendedoresAutorizados !== null) {
-    return vendedoresAutorizados;
-  }
-
-  const entradas = (process.env.TELEGRAM_VENDEDORES_AUTORIZADOS ?? "")
-    .split(",")
-    .map((entrada) => entrada.trim());
-
-  const ids = new Set<string>();
-
-  entradas.forEach((entrada, indice) => {
-    if (entrada === "") {
-      return;
-    }
-
-    if (!/^\d+$/.test(entrada)) {
-      throw new Error(
-        `[Config] TELEGRAM_VENDEDORES_AUTORIZADOS: entrada ${indice + 1} inválida (use apenas dígitos do user_id do Telegram).`,
-      );
-    }
-
-    ids.add(entrada);
-  });
-
-  if (ids.size === 0) {
-    console.warn(
-      "[Config] TELEGRAM_VENDEDORES_AUTORIZADOS vazio: nenhum vendedor autorizado no Telegram.",
-    );
-  }
-
-  vendedoresAutorizados = ids;
-
-  return ids;
-}
-
-/**
- * Somente para testes: descarta os valores guardados.
+ * Somente para testes: descarta o valor guardado.
  */
 export function redefinirConfigTelegramParaTestes(): void {
   ttlHoras = null;
-
-  vendedoresAutorizados = null;
 }

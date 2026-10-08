@@ -62,8 +62,8 @@ export type RegistroAtendimento = {
   estado: EstadoAtendimento;
 
   /*
-   * Número canônico do vendedor.
-   * null enquanto pendente.
+   * Identidade canônica do vendedor
+   * (user_id do Telegram). null enquanto pendente.
    */
   responsavel: string | null;
 
@@ -77,7 +77,7 @@ export type RegistroAtendimento = {
 
 /*
  * Quem perde a disputa não recebe o chatId
- * do cliente nem o número do vencedor.
+ * do cliente nem a identidade do vencedor.
  */
 export type TentativaAssumir =
   | {
@@ -110,64 +110,16 @@ export type OpcoesRegistro = {
   agora?: () => number;
 
   /*
-   * Números canônicos autorizados.
+   * Identidades canônicas que podem assumir.
    */
-  vendedoresAutorizados?: () => ReadonlySet<string>;
+  vendedoresAutorizados: () => ReadonlySet<string>;
 
   /*
-   * Forma canônica da identidade do vendedor.
-   * Padrão: número de telefone. A integração do
-   * Telegram usa o user_id.
+   * Forma canônica da identidade do vendedor
+   * ("" quando inválida).
    */
-  normalizarVendedor?: (vendedor: unknown) => string;
+  normalizarVendedor: (vendedor: unknown) => string;
 };
-
-/**
- * Forma canônica de um número para comparação.
- *
- * - mantém só os dígitos;
- * - celular brasileiro com 13 dígitos (55 + DDD + 9 + 8):
- *   remove o 9 logo após o DDD (a Meta pode enviar o
- *   wa_id sem ele);
- * - qualquer outro número fica intacto.
- */
-export function normalizarNumeroVendedor(numero: unknown): string {
-  if (typeof numero !== "string") {
-    return "";
-  }
-
-  const digitos = numero.replace(/\D/g, "");
-
-  if (digitos.length === 13 && digitos.startsWith("55") && digitos[4] === "9") {
-    return digitos.slice(0, 4) + digitos.slice(5);
-  }
-
-  return digitos;
-}
-
-let avisoListaVaziaEmitido = false;
-
-/**
- * Lê VENDEDORES_AUTORIZADOS (números separados por vírgula).
- *
- * Ausente ou vazia: ninguém é autorizado (falha fechada).
- */
-export function lerVendedoresAutorizados(): ReadonlySet<string> {
-  const numeros = (process.env.VENDEDORES_AUTORIZADOS ?? "")
-    .split(",")
-    .map((numero) => normalizarNumeroVendedor(numero))
-    .filter((numero) => numero !== "");
-
-  if (numeros.length === 0 && !avisoListaVaziaEmitido) {
-    avisoListaVaziaEmitido = true;
-
-    console.warn(
-      "[Atribuição] VENDEDORES_AUTORIZADOS não configurado: nenhum vendedor autorizado.",
-    );
-  }
-
-  return new Set(numeros);
-}
 
 /**
  * Registro de atendimentos e lock de atribuição.
@@ -192,7 +144,7 @@ export class RegistroAtendimentosVendedor {
 
   private readonly normalizarVendedor: (vendedor: unknown) => string;
 
-  constructor(opcoes: OpcoesRegistro = {}) {
+  constructor(opcoes: OpcoesRegistro) {
     this.ttlPendenteMs = opcoes.ttlPendenteMs ?? TTL_PENDENTE_PADRAO_MS;
 
     this.ttlAssumidoMs = opcoes.ttlAssumidoMs ?? TTL_ASSUMIDO_PADRAO_MS;
@@ -201,11 +153,9 @@ export class RegistroAtendimentosVendedor {
 
     this.agora = opcoes.agora ?? (() => Date.now());
 
-    this.vendedoresAutorizados =
-      opcoes.vendedoresAutorizados ?? lerVendedoresAutorizados;
+    this.vendedoresAutorizados = opcoes.vendedoresAutorizados;
 
-    this.normalizarVendedor =
-      opcoes.normalizarVendedor ?? normalizarNumeroVendedor;
+    this.normalizarVendedor = opcoes.normalizarVendedor;
   }
 
   /**
@@ -272,10 +222,10 @@ export class RegistroAtendimentosVendedor {
    * gravação do vencedor. Em um único processo
    * Node.js isso garante que o primeiro vence.
    *
-   * O número do vendedor deve vir SOMENTE do
-   * remetente real do webhook (messages[].from,
-   * com assinatura validada). Nunca de nome,
-   * texto ou payload do botão.
+   * A identidade do vendedor deve vir SOMENTE do
+   * remetente real do update (callback_query.from,
+   * com o secret do webhook validado). Nunca de
+   * nome, texto ou payload do botão.
    */
   tentarAssumir(
     atendimentoId: string,
@@ -487,27 +437,4 @@ export class RegistroAtendimentosVendedor {
       ].join(" | "),
     );
   }
-}
-
-/*
- * Instância do módulo para a integração futura.
- */
-const registro = new RegistroAtendimentosVendedor();
-
-export function registrarAtendimentoPendente(
-  atendimentoId: string,
-  chatId: string,
-): boolean {
-  return registro.registrarPendente(atendimentoId, chatId);
-}
-
-export function tentarAssumir(
-  atendimentoId: string,
-  vendedor: string | null | undefined,
-): TentativaAssumir {
-  return registro.tentarAssumir(atendimentoId, vendedor);
-}
-
-export function chatTemAtendimentoAtivo(chatId: string): boolean {
-  return registro.chatTemAtendimentoAtivo(chatId);
 }

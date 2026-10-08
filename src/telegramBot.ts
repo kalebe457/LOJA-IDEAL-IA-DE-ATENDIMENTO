@@ -13,6 +13,9 @@ import type { ResumoCliente } from "./tipos.js";
  * Integração dos vendedores pelo Telegram.
  *
  * - O resumo vai para o grupo com o botão ASSUMIR.
+ * - Quem pode ser vendedor: quem está no grupo dos
+ *   vendedores (getChatMember), conferido no /start
+ *   e de novo em cada clique em ASSUMIR.
  * - O vendedor se registra mandando /start ao bot
  *   no privado (só o user_id, o nome do Telegram e
  *   o chat privado são guardados).
@@ -30,6 +33,25 @@ const MENSAGEM_ONBOARDING =
   "Antes de assumir um atendimento, abra @LojaIdealAtendimentoBot no privado e envie /start.";
 
 const MENSAGEM_INDISPONIVEL = "Este atendimento não está mais disponível.";
+
+const MENSAGEM_FORA_DA_EQUIPE =
+  "Você não faz parte da equipe de vendedores da Loja Ideal.";
+
+const MENSAGEM_VERIFICACAO_FALHOU =
+  "Não consegui verificar sua participação na equipe agora. Tente novamente em instantes.";
+
+/*
+ * Tempo máximo da consulta ao grupo: uma API lenta não
+ * pode deixar o /start ou o callback presos.
+ */
+const TIMEOUT_GET_CHAT_MEMBER_MS = 5_000;
+
+/*
+ * Quem está no grupo dos vendedores (TELEGRAM_CHAT_ID) com
+ * um destes status pode atuar como vendedor. É a ÚNICA fonte
+ * de autorização. "restricted", "left" e "kicked" não valem.
+ */
+const STATUS_AUTORIZADOS = new Set(["member", "administrator", "creator"]);
 
 /*
  * Atendimentos mais antigos que isso saem
@@ -165,8 +187,10 @@ let atendimentos = new Map<string, AtendimentoTelegram>();
 let idsProcessados = new Set<string>();
 
 /*
- * O MESMO lock de atendimentoVendedor.ts:
- * autorizado = vendedor que fez /start.
+ * O MESMO lock de atendimentoVendedor.ts. Para ele,
+ * "autorizado" = registrado pelo /start (precisa do chat
+ * privado para a DM). A autorização de verdade (grupo)
+ * é conferida ANTES de chamar o lock.
  */
 let lock = criarLock();
 
@@ -211,6 +235,7 @@ export function redefinirEstadoTelegramParaTestes(): void {
 async function chamarTelegram<T>(
   metodo: string,
   corpo: Record<string, unknown>,
+  timeoutMs?: number,
 ): Promise<RespostaTelegram<T>> {
   const { token } = config();
 
@@ -227,6 +252,8 @@ async function chamarTelegram<T>(
       headers: { "Content-Type": "application/json" },
 
       body: JSON.stringify(corpo),
+
+      ...(timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
     });
 
     const json = (await resposta.json()) as RespostaTelegram<T>;
@@ -574,6 +601,53 @@ async function enviarDMVencedor(
   return resposta.ok;
 }
 
+type ParticipacaoGrupo = "autorizado" | "fora_da_equipe" | "erro";
+
+/**
+ * O usuário faz parte AGORA do grupo dos vendedores?
+ *
+ * Consulta getChatMember a cada chamada (sem cache): sair ou
+ * ser removido do grupo retira a autorização na hora.
+ * O bot precisa ser administrador do grupo.
+ *
+ * - "autorizado": member, administrator ou creator;
+ * - "fora_da_equipe": qualquer outro status (left, kicked,
+ *   restricted...);
+ * - "erro": falha técnica (HTTP/API, rede, timeout, resposta
+ *   inesperada). Também NEGA o acesso.
+ */
+async function participaDoGrupoVendedores(usuarioId: number): Promise<ParticipacaoGrupo> {
+  const resposta = await chamarTelegram<{ status?: unknown }>(
+    "getChatMember",
+    { chat_id: config().chatId, user_id: usuarioId },
+    TIMEOUT_GET_CHAT_MEMBER_MS,
+  );
+
+  const status = resposta.ok ? resposta.result?.status : undefined;
+
+  if (typeof status !== "string" || status === "") {
+    console.log(
+      `[Telegram] participação no grupo não verificada (user_id ${usuarioId}): falha técnica; acesso negado.`,
+    );
+
+    return "erro";
+  }
+
+  if (STATUS_AUTORIZADOS.has(status)) {
+    console.log(
+      `[Telegram] participação no grupo confirmada (user_id ${usuarioId}, status: ${status}).`,
+    );
+
+    return "autorizado";
+  }
+
+  console.log(
+    `[Telegram] user_id ${usuarioId} fora da equipe de vendedores (status no grupo: ${status}); acesso negado.`,
+  );
+
+  return "fora_da_equipe";
+}
+
 async function processarStartPrivado(mensagem: TelegramMensagem): Promise<void> {
   const usuario = mensagem.from;
 
@@ -584,6 +658,31 @@ async function processarStartPrivado(mensagem: TelegramMensagem): Promise<void> 
   const userId = normalizarIdTelegram(usuario.id);
 
   if (!userId) {
+    return;
+  }
+
+  /*
+   * Só quem está no grupo dos vendedores é registrado.
+   */
+  const participacao = await participaDoGrupoVendedores(usuario.id);
+
+  if (participacao !== "autorizado") {
+    /*
+     * Fora do grupo: o registro anterior deixa de valer.
+     * Falha técnica: nada muda (não dá para saber).
+     */
+    if (participacao === "fora_da_equipe") {
+      vendedores.delete(userId);
+    }
+
+    await chamarTelegram("sendMessage", {
+      chat_id: mensagem.chat.id,
+      text:
+        participacao === "erro"
+          ? MENSAGEM_VERIFICACAO_FALHOU
+          : MENSAGEM_FORA_DA_EQUIPE,
+    });
+
     return;
   }
 
@@ -653,10 +752,33 @@ async function processarCallback(callback: TelegramCallbackQuery): Promise<void>
 
   const userId = normalizarIdTelegram(callback.from.id);
 
+  /*
+   * Autorização ANTES de qualquer lock, mesmo para quem
+   * já fez /start: precisa estar no grupo agora.
+   */
+  if (!userId) {
+    await responderCallback(callback.id, MENSAGEM_FORA_DA_EQUIPE, true);
+
+    return;
+  }
+
+  const participacao = await participaDoGrupoVendedores(callback.from.id);
+
+  if (participacao !== "autorizado") {
+    await responderCallback(
+      callback.id,
+      participacao === "erro" ? MENSAGEM_VERIFICACAO_FALHOU : MENSAGEM_FORA_DA_EQUIPE,
+      true,
+    );
+
+    return;
+  }
+
   const vendedor = vendedores.get(userId);
 
   /*
-   * Sem /start no privado: não tenta o lock.
+   * No grupo, mas sem /start no privado (não há chat
+   * para a DM): não tenta o lock.
    */
   if (!vendedor) {
     await responderCallback(callback.id, MENSAGEM_ONBOARDING, true);
