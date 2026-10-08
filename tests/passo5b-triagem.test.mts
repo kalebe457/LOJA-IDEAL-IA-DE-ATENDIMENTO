@@ -19,7 +19,7 @@ const BASE = "http://127.0.0.1:39880";
 
 // Relógio controlado: quarta 07/10/2026 10:00 em Belém (loja aberta).
 const agoraReal = Date.now.bind(Date);
-const desloc = Date.parse("2026-10-07T10:00:00-03:00") - agoraReal();
+let desloc = Date.parse("2026-10-07T10:00:00-03:00") - agoraReal();
 Date.now = () => agoraReal() + desloc;
 
 // Graph API simulada: aceita (devolve wamid) ou recusa com erro permanente (131047, sem retry).
@@ -51,8 +51,10 @@ const B = new URL("..", import.meta.url).href.replace(/\/$/, "");
 const { default: Anthropic } = await import(B + "/node_modules/@anthropic-ai/sdk/index.mjs");
 let qtdAplicavel = true;
 let chamadasClaude = 0;
+let claudeFalha = false;
 (Anthropic as any).Messages.prototype.parse = async function () {
   chamadasClaude++;
+  if (claudeFalha) throw new Error("Claude indisponível (simulado)");
   return { model: "stub", usage: { input_tokens: 0, output_tokens: 0 }, parsed_output: { resposta: "", status: "IA", quantidade_aplicavel: qtdAplicavel,
     resumo: { nome: "Não informado", produto: "Não informado", quantidade: "Não informado", observacoes: "Não informado" } } };
 };
@@ -245,6 +247,62 @@ await mensagem(TEL_E, "areia");
 const e = (await atendimento(TEL_E))!;
 ok(e.nome === "Davi" && e.produto === "areia" && e.etapa_atual === "quantidade", "banco de volta: a mensagem seguinte grava o estado completo da memória");
 await comparar(TEL_E, "depois da recuperação");
+
+out("\n== 5b.1: nome com 300 caracteres (emoji no corte) ==");
+const TEL_F = "5591900000606";
+// O emoji é o 150º caractere: cortar por unidade UTF-16 partiria o par substituto.
+const nomeLongo = "A".repeat(149) + "😀" + "C".repeat(150);
+const nomeEsperado = "A".repeat(149) + "😀";
+ok(Array.from(nomeLongo).length === 300 && nomeLongo.length === 301, "nome de teste: 300 caracteres (301 unidades UTF-16)");
+await mensagem(TEL_F, "oi");
+await mensagem(TEL_F, nomeLongo);
+const f1 = (await banco.consultar("SELECT nome, char_length(nome) n, etapa_atual FROM atendimentos WHERE chat_id = $1", [chat(TEL_F)])).rows[0];
+const memF = webhook.lerEstadoEspelhavel(chat(TEL_F));
+ok(memF?.resumo.nome === nomeEsperado && f1?.nome === nomeEsperado && f1?.n === 150, `memória e banco com o mesmo nome de 150 caracteres (emoji inteiro no fim)`);
+await comparar(TEL_F, "depois do nome longo");
+await mensagem(TEL_F, "areia");
+const f2 = (await atendimento(TEL_F))!;
+ok(f2.produto === "areia" && f2.etapa_atual === "quantidade" && direcoes(await mensagens(TEL_F)) === "ESESES", "mensagem seguinte espelhada normalmente (produto, etapa, ENTRADA/SAIDA)");
+await comparar(TEL_F, "depois da mensagem seguinte");
+
+out("\n== 5b.1: Claude lançando erro ==");
+const TEL_G = "5591900000607", TEL_H = "5591900000608";
+await mensagem(TEL_G, "oi");
+const g0 = (await atendimento(TEL_G))!;
+claudeFalha = true;
+await mensagem(TEL_G, "Gil");
+const g1 = (await atendimento(TEL_G))!;
+const mg = await mensagens(TEL_G);
+ok(direcoes(mg) === "ESES" && mg[2]!.texto === "Gil" && mg[3]!.texto.startsWith("Tive uma instabilidade") && /^wamid\.teste-5b-resp-/.test(mg[3]!.mensagem_externa_id ?? ""),
+  "Meta aceitando: ENTRADA gravada e a resposta de instabilidade (realmente enviada) como SAIDA, com wamid");
+ok(g1.etapa_atual === g0.etapa_atual && g1.perguntas_etapa === g0.perguntas_etapa && g1.nome === null && g1.status === "HUMANO" && (g1.observacoes ?? "").includes("Falha técnica"),
+  "estado da triagem intacto (mesma etapa e perguntas, nome não preenchido); status HUMANO com a nota de falha");
+await comparar(TEL_G, "depois do erro do Claude (Meta aceitando)");
+claudeFalha = false;
+await mensagem(TEL_H, "oi");
+claudeFalha = true;
+graphAceita = false;
+await mensagem(TEL_H, "Hugo");
+graphAceita = true;
+claudeFalha = false;
+const mh = await mensagens(TEL_H);
+ok(direcoes(mh) === "ESE" && mh[2]!.texto === "Hugo", "Meta recusando: ENTRADA gravada, nenhuma SAIDA");
+await comparar(TEL_H, "depois do erro do Claude (Meta recusando)");
+
+out("\n== 5b.1: loja fechada (não espelhada: não existe atendimento) ==");
+desloc += 12 * 60 * 60_000; // quarta 22:00 em Belém
+const TEL_I = "5591900000609", TEL_J = "5591900000610";
+const enviosI = envios;
+await mensagem(TEL_I, "oi, estão abertos?");
+graphAceita = false;
+await mensagem(TEL_J, "oi, estão abertos?");
+graphAceita = true;
+const nadaGravado = async (tel: string) =>
+  Number((await banco.consultar("SELECT count(*) n FROM atendimentos WHERE chat_id = $1", [chat(tel)])).rows[0].n) === 0 &&
+  (await mensagens(tel)).length === 0 && webhook.lerEstadoEspelhavel(chat(tel)) === null;
+ok(envios === enviosI + 2 && logs.some((l) => l.startsWith("Loja fechada: aviso enviado")), "aviso de loja fechada enviado (aceito num chat, recusado no outro)");
+ok((await nadaGravado(TEL_I)) && (await nadaGravado(TEL_J)), "memória sem conversa e banco sem atendimento nem mensagens (memória × banco iguais)");
+desloc -= 12 * 60 * 60_000;
 
 ok(externas.length === 0, `nenhuma chamada de rede externa (${externas.length})`);
 const senha = process.env.DB_PASSWORD ?? "";

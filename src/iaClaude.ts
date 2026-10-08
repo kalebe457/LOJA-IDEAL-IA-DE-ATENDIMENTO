@@ -241,6 +241,27 @@ function normalizarCampo(novo: unknown, anterior: string): string {
   return novoLimpo;
 }
 
+/*
+ * Mesmo limite de atendimentos.nome (VARCHAR(150)).
+ */
+const MAX_CARACTERES_NOME = 150;
+
+/**
+ * Corta o nome em MAX_CARACTERES_NOME caracteres.
+ *
+ * Conta por code point (como o PostgreSQL em UTF8),
+ * então um emoji nunca é partido ao meio.
+ */
+function limitarNome(nome: string): string {
+  const caracteres = Array.from(nome);
+
+  if (caracteres.length <= MAX_CARACTERES_NOME) {
+    return nome;
+  }
+
+  return caracteres.slice(0, MAX_CARACTERES_NOME).join("").trimEnd();
+}
+
 /**
  * Normaliza textos para comparações.
  */
@@ -1043,6 +1064,12 @@ export class IAClaude implements IA {
 
       this.etapasConcluidas.add("observacoes");
     }
+
+    /*
+     * Nome tem no máximo MAX_CARACTERES_NOME
+     * (atendimentos.nome é VARCHAR(150)).
+     */
+    resumo.nome = limitarNome(resumo.nome);
 
     /*
      * Guarda o resumo atual dentro da instância.

@@ -756,185 +756,186 @@ async function processarMensagemRecebida(payload: EventoMensagem): Promise<void>
     };
 
     /*
-     * Sem texto e sem telefone completo (LGPD).
+     * Espelho (Passo 5b): QUALQUER saída daqui em diante (return,
+     * erro inesperado ou fim normal) grava a ENTRADA com o estado
+     * da memória naquele momento, já depois de um eventual desfazer.
      */
-    console.log(
-      [
-        "Mensagem recebida (Meta)",
-        `atendimento: ${conversa.atendimentoId}`,
-        `chatId: ${mascararChatId(chatId)}`,
-        `tamanho: ${texto.length}`,
-        `senderPhone: ${data.senderPhone ? mascararTelefone(normalizarTelefone(data.senderPhone)) : "Não informado"}`,
-      ].join(" | "),
-    );
-
-    /*
-     * Se vendedor já assumiu,
-     * a IA permanece desligada.
-     */
-    if (conversa.cliente.status === "HUMANO") {
-      console.log(
-        `IA desativada para ${mascararChatId(chatId)}: atendimento humano.`,
-      );
-
-      await espelharMensagem(chatId, conversa, entrada, null);
-
-      return;
-    }
+    let saida: MensagemEspelho | null = null;
 
     let resultado: ResultadoIA;
 
     try {
-      resultado = await conversa.ia.responder(texto, conversa.cliente);
-    } catch (erro: unknown) {
-      console.error(
-        `Falha na IA (${conversa.atendimentoId}): ${descreverErroIA(erro)}`,
-      );
-
-      const observacoes = conversa.cliente.resumo.observacoes;
-
-      const nota = "Falha técnica na triagem automática.";
-
-      resultado = {
-        resposta:
-          "Tive uma instabilidade aqui. Vou encaminhar seu atendimento para um vendedor da Loja Ideal, que dará continuidade.",
-
-        status: "HUMANO",
-
-        resumo: {
-          ...conversa.cliente.resumo,
-
-          telefone: conversa.cliente.telefone,
-
-          observacoes:
-            observacoes === "Não informado" ? nota : `${observacoes} | ${nota}`,
-        },
-      };
-    }
-
-    /*
-     * IMPORTANTE:
-     *
-     * Um vendedor pode ter assumido pelo Telegram
-     * enquanto a Claude estava processando.
-     *
-     * Nesse caso, HUMANO tem prioridade.
-     */
-    if (conversa.vendedorAssumiu) {
-      conversa.cliente.status = "HUMANO";
-
+      /*
+       * Sem texto e sem telefone completo (LGPD).
+       */
       console.log(
-        `Atendimento ${conversa.atendimentoId} foi assumido pelo vendedor durante o processamento da IA.`,
+        [
+          "Mensagem recebida (Meta)",
+          `atendimento: ${conversa.atendimentoId}`,
+          `chatId: ${mascararChatId(chatId)}`,
+          `tamanho: ${texto.length}`,
+          `senderPhone: ${data.senderPhone ? mascararTelefone(normalizarTelefone(data.senderPhone)) : "Não informado"}`,
+        ].join(" | "),
       );
 
       /*
-       * Atualizamos apenas o resumo.
+       * Se vendedor já assumiu,
+       * a IA permanece desligada.
+       */
+      if (conversa.cliente.status === "HUMANO") {
+        console.log(
+          `IA desativada para ${mascararChatId(chatId)}: atendimento humano.`,
+        );
+
+        return;
+      }
+
+      try {
+        resultado = await conversa.ia.responder(texto, conversa.cliente);
+      } catch (erro: unknown) {
+        console.error(
+          `Falha na IA (${conversa.atendimentoId}): ${descreverErroIA(erro)}`,
+        );
+
+        const observacoes = conversa.cliente.resumo.observacoes;
+
+        const nota = "Falha técnica na triagem automática.";
+
+        resultado = {
+          resposta:
+            "Tive uma instabilidade aqui. Vou encaminhar seu atendimento para um vendedor da Loja Ideal, que dará continuidade.",
+
+          status: "HUMANO",
+
+          resumo: {
+            ...conversa.cliente.resumo,
+
+            telefone: conversa.cliente.telefone,
+
+            observacoes:
+              observacoes === "Não informado" ? nota : `${observacoes} | ${nota}`,
+          },
+        };
+      }
+
+      /*
+       * IMPORTANTE:
        *
-       * Não enviamos a resposta automática
-       * da Claude.
-       */
-      conversa.cliente.resumo = resultado.resumo;
-
-      await espelharMensagem(chatId, conversa, entrada, null);
-
-      return;
-    }
-
-    /*
-     * Resultado normal da IA.
-     */
-    conversa.cliente.status = resultado.status;
-
-    conversa.cliente.resumo = resultado.resumo;
-
-    /*
-     * Triagem iniciada antes do fechamento e
-     * concluída depois: o cliente fica sabendo
-     * que o vendedor só retorna na reabertura.
-     */
-    if (resultado.status === "HUMANO" && !lojaAberta()) {
-      resultado.resposta = `${resultado.resposta}\n\n${AVISO_ENCAMINHAMENTO_FORA_DO_HORARIO}`;
-    }
-
-    console.log(`Status: ${resultado.status}`);
-
-    console.log(
-      `Resumo (${conversa.atendimentoId}) campos preenchidos: ${camposPreenchidos(conversa.cliente.resumo)}`,
-    );
-
-    /*
-     * Modo log-only da Meta (META_ENVIO_ATIVO=false):
-     * a resposta NÃO é enviada de propósito.
-     *
-     * Isso não é falha de envio, então o estado
-     * da triagem NÃO é desfeito e ela avança normalmente.
-     *
-     * A flag é lida uma única vez aqui para decidir.
-     */
-    const modoSomenteLog = !metaEnvioAtivo();
-
-    let clienteAvisado = false;
-
-    let wamidResposta: string | null = null;
-
-    if (modoSomenteLog) {
-      console.log(
-        `[Meta] resposta não enviada (META_ENVIO_ATIVO=false) | destino: ${descreverDestinoMeta(chatId)} | tamanho: ${resultado.resposta.length}`,
-      );
-    } else {
-      /*
-       * Envia a resposta ao cliente (tentativa real).
-       */
-      wamidResposta = await enviarAoCliente(chatId, resultado.resposta);
-
-      clienteAvisado = wamidResposta !== null;
-    }
-
-    if (clienteAvisado) {
-      /*
-       * A resposta automática também
-       * representa atividade.
-       */
-      conversa.ultimaMensagemEm = Date.now();
-    } else if (!modoSomenteLog) {
-      console.error(
-        `Cliente ${mascararChatId(chatId)} não recebeu a resposta.`,
-      );
-
-      /*
-       * Houve tentativa REAL de envio e ela falhou:
-       * a pergunta não pode ficar registrada como feita.
+       * Um vendedor pode ter assumido pelo Telegram
+       * enquanto a Claude estava processando.
        *
-       * Só durante a triagem (IA). Em HUMANO nada é
-       * desfeito: a triagem não reabre e o resumo
-       * segue o fluxo normal, uma única vez.
+       * Nesse caso, HUMANO tem prioridade.
        */
-      if (resultado.status === "IA") {
-        conversa.ia.desfazerRespostaNaoEntregue();
+      if (conversa.vendedorAssumiu) {
+        conversa.cliente.status = "HUMANO";
 
         console.log(
-          `Atendimento ${conversa.atendimentoId}: resposta não entregue desfeita; a pergunta será feita novamente.`,
+          `Atendimento ${conversa.atendimentoId} foi assumido pelo vendedor durante o processamento da IA.`,
         );
-      }
-    }
 
-    /*
-     * Espelho (Passo 5b): estado final, já depois de um
-     * eventual desfazer. A SAIDA só entra se a Meta aceitou
-     * ou em modo somente log (mesma regra da memória).
-     */
-    await espelharMensagem(
-      chatId,
-      conversa,
-      entrada,
-      clienteAvisado || modoSomenteLog
-        ? {
-            wamid: wamidResposta,
-            texto: resultado.resposta,
-            em: proximoInstanteEspelho(conversa),
-          }
-        : null,
-    );
+        /*
+         * Atualizamos apenas o resumo.
+         *
+         * Não enviamos a resposta automática
+         * da Claude.
+         */
+        conversa.cliente.resumo = resultado.resumo;
+
+        return;
+      }
+
+      /*
+       * Resultado normal da IA.
+       */
+      conversa.cliente.status = resultado.status;
+
+      conversa.cliente.resumo = resultado.resumo;
+
+      /*
+       * Triagem iniciada antes do fechamento e
+       * concluída depois: o cliente fica sabendo
+       * que o vendedor só retorna na reabertura.
+       */
+      if (resultado.status === "HUMANO" && !lojaAberta()) {
+        resultado.resposta = `${resultado.resposta}\n\n${AVISO_ENCAMINHAMENTO_FORA_DO_HORARIO}`;
+      }
+
+      console.log(`Status: ${resultado.status}`);
+
+      console.log(
+        `Resumo (${conversa.atendimentoId}) campos preenchidos: ${camposPreenchidos(conversa.cliente.resumo)}`,
+      );
+
+      /*
+       * Modo log-only da Meta (META_ENVIO_ATIVO=false):
+       * a resposta NÃO é enviada de propósito.
+       *
+       * Isso não é falha de envio, então o estado
+       * da triagem NÃO é desfeito e ela avança normalmente.
+       *
+       * A flag é lida uma única vez aqui para decidir.
+       */
+      const modoSomenteLog = !metaEnvioAtivo();
+
+      let clienteAvisado = false;
+
+      let wamidResposta: string | null = null;
+
+      if (modoSomenteLog) {
+        console.log(
+          `[Meta] resposta não enviada (META_ENVIO_ATIVO=false) | destino: ${descreverDestinoMeta(chatId)} | tamanho: ${resultado.resposta.length}`,
+        );
+      } else {
+        /*
+         * Envia a resposta ao cliente (tentativa real).
+         */
+        wamidResposta = await enviarAoCliente(chatId, resultado.resposta);
+
+        clienteAvisado = wamidResposta !== null;
+      }
+
+      if (clienteAvisado) {
+        /*
+         * A resposta automática também
+         * representa atividade.
+         */
+        conversa.ultimaMensagemEm = Date.now();
+      } else if (!modoSomenteLog) {
+        console.error(
+          `Cliente ${mascararChatId(chatId)} não recebeu a resposta.`,
+        );
+
+        /*
+         * Houve tentativa REAL de envio e ela falhou:
+         * a pergunta não pode ficar registrada como feita.
+         *
+         * Só durante a triagem (IA). Em HUMANO nada é
+         * desfeito: a triagem não reabre e o resumo
+         * segue o fluxo normal, uma única vez.
+         */
+        if (resultado.status === "IA") {
+          conversa.ia.desfazerRespostaNaoEntregue();
+
+          console.log(
+            `Atendimento ${conversa.atendimentoId}: resposta não entregue desfeita; a pergunta será feita novamente.`,
+          );
+        }
+      }
+
+      /*
+       * A SAIDA só entra se a Meta aceitou ou em modo
+       * somente log (mesma regra da memória).
+       */
+      if (clienteAvisado || modoSomenteLog) {
+        saida = {
+          wamid: wamidResposta,
+          texto: resultado.resposta,
+          em: proximoInstanteEspelho(conversa),
+        };
+      }
+    } finally {
+      await espelharMensagem(chatId, conversa, entrada, saida);
+    }
 
     /*
      * Quando a IA conclui o atendimento, o resumo vai
