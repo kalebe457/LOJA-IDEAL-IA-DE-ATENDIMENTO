@@ -11,7 +11,11 @@ vendedores no Telegram → vendedor assume e continua a venda pelo WhatsApp dele
   fallback. Envio em `metaEnvio.ts`; `META_ENVIO_ATIVO=false` = só log, o fluxo segue normal.
 - **Telegram: canal dos vendedores.** Resumo no grupo + botão ASSUMIR. Quem pode ser vendedor
   é decidido por `getChatMember` no grupo (member/administrator/creator), no `/start` e a cada
-  clique, antes do lock. Sem lista de vendedores no `.env`.
+  clique, antes do lock. Sem lista de vendedores no `.env`. Assunção: lock em memória →
+  UPDATE condicional no banco (`persistenciaAssuncao.ts`, segundo portão: se o banco já tem
+  OUTRO vendedor, ele vence; falha de banco não impede) → memória → DM → edição do grupo.
+- **`/ranking`** (só no privado, só administrator/creator do grupo): assumidos por vendedor no
+  mês (America/Belem) e no total. Não está no menu do bot (setMyCommands não registrado).
 - **PostgreSQL `loja_ideal`:** deduplicação de `messages[]` em `eventos_processados` (falha → 503)
   e espelho de cliente/atendimento (`persistenciaAtendimento.ts`). A **memória é a fonte de
   verdade**; o banco segue pelo `codigo` (`ATD-` + 10 hex). Falha no espelho só gera log.
@@ -39,7 +43,7 @@ Garantido por `tests/passo3-ordem-lote.test.mts`.
 - Credenciais FALSAS definidas antes dos imports; `fetch` simulado/bloqueado (só `127.0.0.1`).
   Podem ler `DB_*` do `.env` em tempo de execução, nunca copiar valores.
 - Mensagens de teste usam `phone_number_id` fictício `999` → `chat_id` `meta:999:<tel fictício>`.
-  IDs externos com prefixo `teste-`. Limpeza só do que o teste criou, com `DELETE` filtrado
+  IDs externos com prefixo `teste-`; vendedores de teste com `telegram_user_id` 990000000001+. Limpeza só do que o teste criou, com `DELETE` filtrado
   (`tests/limpeza-espelho.mts`); **nunca `TRUNCATE`**. Falha de banco é simulada, nunca parando
   o PostgreSQL.
 - O `tsconfig.json` não tem `include`: `tsc` também checa `tests/` — manter os testes tipados.
@@ -58,7 +62,8 @@ Garantido por `tests/passo3-ordem-lote.test.mts`.
 
 - Feitos: dedup persistente (3), remoção do OpenWA (4), testes versionados (4.5), espelho de
   cliente/atendimento (5a), proteção contra colisão de codigo e banco travado (5a.1) e
-  estado da triagem + mensagens ENTRADA/SAIDA espelhados após cada mensagem (5b).
-- Próximos: **5c** assunção (lock) no PostgreSQL · **5d** recuperação após restart.
+  estado da triagem + mensagens ENTRADA/SAIDA espelhados após cada mensagem (5b), assunção,
+  resumo publicado e DM gravados no banco + `/ranking` (5c).
+- Próximo: **5d** recuperação após restart.
 - Antes de produção: número exclusivo da IA, URL HTTPS fixa, credencial permanente da Meta,
   política de retenção/LGPD.

@@ -7,6 +7,13 @@ import {
 
 import { mascararTelefone } from "./metaEnvio.js";
 
+import {
+  consultarRanking,
+  registrarAssuncao,
+  registrarDmStatus,
+  registrarResumoPublicado,
+} from "./persistenciaAssuncao.js";
+
 import type { ResumoCliente } from "./tipos.js";
 
 /*
@@ -22,7 +29,12 @@ import type { ResumoCliente } from "./tipos.js";
  * - Quem vence o lock recebe, SOMENTE no privado,
  *   os dados do cliente e o botão wa.me.
  *
- * SOMENTE EM MEMÓRIA nesta etapa, como o lock.
+ * A memória (vendedores, atendimentos, lock) é a fonte de
+ * verdade. O banco registra o resumo publicado, a assunção e a
+ * DM, e é um segundo portão contra assunção dupla (Passo 5c).
+ *
+ * /ranking (só no privado, só administradores do grupo):
+ * atendimentos assumidos por vendedor, no mês e no total.
  */
 
 const TELEGRAM_API = "https://api.telegram.org";
@@ -40,6 +52,12 @@ const MENSAGEM_FORA_DA_EQUIPE =
 const MENSAGEM_VERIFICACAO_FALHOU =
   "Não consegui verificar sua participação na equipe agora. Tente novamente em instantes.";
 
+const MENSAGEM_RANKING_SO_ADMIN = "Esse comando é só para administradores do grupo.";
+
+const MENSAGEM_RANKING_VAZIO = "Nenhum atendimento assumido ainda.";
+
+const MENSAGEM_RANKING_ERRO = "Não consegui consultar agora. Tente de novo em instantes.";
+
 /*
  * Tempo máximo da consulta ao grupo: uma API lenta não
  * pode deixar o /start ou o callback presos.
@@ -52,6 +70,11 @@ const TIMEOUT_GET_CHAT_MEMBER_MS = 5_000;
  * de autorização. "restricted", "left" e "kicked" não valem.
  */
 const STATUS_AUTORIZADOS = new Set(["member", "administrator", "creator"]);
+
+/*
+ * Quem pode usar o /ranking.
+ */
+const STATUS_ADMINISTRADORES = new Set(["administrator", "creator"]);
 
 /*
  * Atendimentos mais antigos que isso saem
@@ -467,6 +490,15 @@ export async function enviarResumoTelegram(
 
     console.log(`[Telegram] resumo de ${atendimentoId} enviado ao grupo.`);
 
+    /*
+     * Espelho: a mensagem que está valendo (falha só gera log).
+     */
+    await registrarResumoPublicado(
+      atendimentoId,
+      resposta.result.chat?.id ?? config().chatId,
+      resposta.result.message_id,
+    );
+
     return true;
   }
 
@@ -588,6 +620,11 @@ async function enviarDMVencedor(
 
   atd.dm = resposta.ok ? "enviada" : "falhou";
 
+  /*
+   * Espelho do resultado da DM (falha só gera log).
+   */
+  await registrarDmStatus(atd.atendimentoId, resposta.ok ? "ENVIADA" : "FALHOU");
+
   if (resposta.ok) {
     console.log(
       `[Telegram] DM de ${atd.atendimentoId} enviada ao vendedor (cliente ${mascararTelefone(atd.resumo.telefone.replace(/\D/g, ""))}).`,
@@ -604,6 +641,22 @@ async function enviarDMVencedor(
 type ParticipacaoGrupo = "autorizado" | "fora_da_equipe" | "erro";
 
 /**
+ * Status do usuário no grupo dos vendedores (getChatMember,
+ * sem cache, com timeout). null = falha técnica.
+ */
+async function statusNoGrupo(usuarioId: number): Promise<string | null> {
+  const resposta = await chamarTelegram<{ status?: unknown }>(
+    "getChatMember",
+    { chat_id: config().chatId, user_id: usuarioId },
+    TIMEOUT_GET_CHAT_MEMBER_MS,
+  );
+
+  const status = resposta.ok ? resposta.result?.status : undefined;
+
+  return typeof status === "string" && status !== "" ? status : null;
+}
+
+/**
  * O usuário faz parte AGORA do grupo dos vendedores?
  *
  * Consulta getChatMember a cada chamada (sem cache): sair ou
@@ -617,15 +670,9 @@ type ParticipacaoGrupo = "autorizado" | "fora_da_equipe" | "erro";
  *   inesperada). Também NEGA o acesso.
  */
 async function participaDoGrupoVendedores(usuarioId: number): Promise<ParticipacaoGrupo> {
-  const resposta = await chamarTelegram<{ status?: unknown }>(
-    "getChatMember",
-    { chat_id: config().chatId, user_id: usuarioId },
-    TIMEOUT_GET_CHAT_MEMBER_MS,
-  );
+  const status = await statusNoGrupo(usuarioId);
 
-  const status = resposta.ok ? resposta.result?.status : undefined;
-
-  if (typeof status !== "string" || status === "") {
+  if (status === null) {
     console.log(
       `[Telegram] participação no grupo não verificada (user_id ${usuarioId}): falha técnica; acesso negado.`,
     );
@@ -800,6 +847,56 @@ async function processarCallback(callback: TelegramCallbackQuery): Promise<void>
 
       atd.dm = "enviando";
 
+      /*
+       * Segundo portão: o banco (UPDATE só se ainda sem vendedor).
+       * Linha inexistente ou falha de banco NÃO impedem a
+       * assunção: segue pela memória, como antes.
+       */
+      const banco = await registrarAssuncao({
+        codigo: atendimentoId,
+        telegramUserId: userId,
+
+        /*
+         * Nome ATUAL no Telegram (do clique), não o do /start.
+         */
+        nome: nomeDoUsuario(callback.from),
+        chatPrivadoId: vendedor.chatPrivadoId,
+        telegramChatId: mensagem.chat.id,
+        telegramMessageId: mensagem.message_id,
+      });
+
+      if (banco === "ja_por_outro") {
+        /*
+         * O banco vence (proteção para depois de um reinício):
+         * a memória NÃO fica com este vendedor.
+         */
+        lock.desfazerAssuncao(atendimentoId, userId);
+
+        atd.vendedorId = null;
+
+        atd.vendedorNome = null;
+
+        atd.dm = "pendente";
+
+        console.error(
+          `[Telegram] ${atendimentoId}: o banco já registra outro vendedor; assunção recusada.`,
+        );
+
+        await responderCallback(
+          callback.id,
+          "Este atendimento já foi assumido por outro vendedor.",
+          true,
+        );
+
+        return;
+      }
+
+      if (banco === "sem_linha" || banco === "erro") {
+        console.warn(
+          `[Telegram] ${atendimentoId}: assunção não gravada no banco (${banco === "erro" ? "falha de banco" : "atendimento ausente"}); segue pela memória.`,
+        );
+      }
+
       try {
         aoAssumir(atendimentoId);
       } catch (erro: unknown) {
@@ -807,6 +904,18 @@ async function processarCallback(callback: TelegramCallbackQuery): Promise<void>
           `[Telegram] falha ao marcar ${atendimentoId} como HUMANO:`,
           erro instanceof Error ? erro.message : "erro desconhecido",
         );
+      }
+
+      /*
+       * O banco já tinha ESTE vendedor (depois de um reinício):
+       * mesma resposta de hoje para "já assumido por você".
+       */
+      if (banco === "ja_por_voce") {
+        atd.dm = "enviada";
+
+        await responderCallback(callback.id, "Você já assumiu este atendimento.");
+
+        return;
       }
 
       await responderCallback(
@@ -870,10 +979,73 @@ async function processarCallback(callback: TelegramCallbackQuery): Promise<void>
 }
 
 /**
+ * /ranking no privado: só administradores do grupo.
+ * Só nomes de vendedores e números (sem cliente, sem codigo).
+ */
+async function processarRankingPrivado(mensagem: TelegramMensagem): Promise<void> {
+  const usuario = mensagem.from;
+
+  if (!usuario || usuario.is_bot) {
+    return;
+  }
+
+  const responder = (texto: string) =>
+    chamarTelegram("sendMessage", { chat_id: mensagem.chat.id, text: texto });
+
+  const status = await statusNoGrupo(usuario.id);
+
+  if (status === null) {
+    await responder(MENSAGEM_VERIFICACAO_FALHOU);
+
+    return;
+  }
+
+  if (!STATUS_ADMINISTRADORES.has(status)) {
+    console.log(`[Telegram] /ranking negado (user_id ${usuario.id}, status: ${status}).`);
+
+    await responder(MENSAGEM_RANKING_SO_ADMIN);
+
+    return;
+  }
+
+  const ranking = await consultarRanking();
+
+  if (ranking === null) {
+    await responder(MENSAGEM_RANKING_ERRO);
+
+    return;
+  }
+
+  if (ranking.length === 0) {
+    await responder(MENSAGEM_RANKING_VAZIO);
+
+    return;
+  }
+
+  const mes = new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Belem",
+    month: "long",
+    year: "numeric",
+  }).format(Date.now());
+
+  await responder(
+    [
+      "🏆 ATENDIMENTOS ASSUMIDOS",
+      `Mês: ${mes}`,
+      "",
+      ...ranking.map(
+        (linha, indice) =>
+          `${indice + 1}. ${linha.nome}: ${linha.mes} no mês | ${linha.total} no total`,
+      ),
+    ].join("\n"),
+  );
+}
+
+/**
  * Processa um Update recebido em POST /telegram/webhook.
  *
- * Só /start em conversa privada e callback_query.
- * Todo o resto é ignorado.
+ * Só /start e /ranking em conversa privada e callback_query.
+ * Todo o resto (inclusive comandos no grupo) é ignorado.
  */
 export async function processarUpdateTelegram(update: TelegramUpdate): Promise<void> {
   if (typeof update?.update_id === "number" && jaProcessado(`up:${update.update_id}`)) {
@@ -895,5 +1067,16 @@ export async function processarUpdateTelegram(update: TelegramUpdate): Promise<v
     /^\/start(?:@\w+)?(?:\s|$)/.test(mensagem.text.trim())
   ) {
     await processarStartPrivado(mensagem);
+
+    return;
+  }
+
+  if (
+    mensagem &&
+    mensagem.chat?.type === "private" &&
+    typeof mensagem.text === "string" &&
+    /^\/ranking(?:@\w+)?(?:\s|$)/.test(mensagem.text.trim())
+  ) {
+    await processarRankingPrivado(mensagem);
   }
 }

@@ -1154,11 +1154,10 @@ export function iniciarWebhook(): void {
    */
   definirAoAssumirAtendimento((atendimentoId) => {
     /*
-     * Atendimento assumido sai da IA: a linha do banco é
-     * encerrada (a conversa continua em memória como HUMANO).
+     * A linha do banco (vendedor, HUMANO, encerrado_em) já foi
+     * gravada pela assunção em telegramBot.ts (Passo 5c). A
+     * conversa continua em memória como HUMANO.
      */
-    void registrarEncerramentoAtendimento(atendimentoId);
-
     for (const conversa of conversas.values()) {
       if (conversa.atendimentoId !== atendimentoId) {
         continue;

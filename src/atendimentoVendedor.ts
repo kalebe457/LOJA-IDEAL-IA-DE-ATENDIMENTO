@@ -307,6 +307,32 @@ export class RegistroAtendimentosVendedor {
   }
 
   /**
+   * Desfaz a atribuição a ESTE vendedor (volta a pendente).
+   *
+   * Só para quando o banco já registra OUTRO vendedor
+   * (o banco vence). Devolve true se desfez.
+   */
+  desfazerAssuncao(atendimentoId: string, vendedor: string): boolean {
+    const numero = this.normalizarVendedor(vendedor);
+
+    const registro = this.itens.get(atendimentoId);
+
+    if (!registro || numero === "" || registro.responsavel !== numero) {
+      return false;
+    }
+
+    registro.estado = EstadoAtendimento.PENDENTE;
+
+    registro.responsavel = null;
+
+    registro.assumidoEm = null;
+
+    console.log(`[Atribuição] ${atendimentoId}: atribuição desfeita (banco registra outro vendedor)`);
+
+    return true;
+  }
+
+  /**
    * Devolve uma CÓPIA do registro (alterá-la
    * não muda o estado interno).
    */
