@@ -103,6 +103,10 @@ ok(chamadasClaude === antes, `Claude não foi chamado depois de assumido (chamad
 ok(telegram.filter((c) => c.metodo === "sendMessage" && c.corpo.chat_id === "-1009999999999").length === 1, "nenhum segundo resumo no grupo");
 
 ok(externas.length === 0, `nenhuma chamada de rede fora do mock (${externas.length})`);
+{ const bancoE2E = await import(B + "/src/banco.ts"); const apagados = (await bancoE2E.consultar("DELETE FROM eventos_processados WHERE mensagem_externa_id LIKE 'teste-dedup-e2e-%'")).rowCount; logReal(`limpeza: ${apagados} registro(s) teste-dedup-e2e- apagados`);
+  const { limparEspelhoDeTeste } = await import(B + "/tests/limpeza-espelho.mts");
+  const espelho = await limparEspelhoDeTeste(bancoE2E.consultar);
+  ok(espelho.restantes === 0, `espelho: ${espelho.atendimentos} atendimento(s) e ${espelho.clientes} cliente(s) de teste apagados; restantes = ${espelho.restantes}`);
+  await bancoE2E.encerrarBanco(); }
 logReal(falhas ? `\n${falhas} FALHA(S)` : "\nTODOS OS TESTES PASSARAM");
-{ const bancoE2E = await import(B + "/src/banco.ts"); const apagados = (await bancoE2E.consultar("DELETE FROM eventos_processados WHERE mensagem_externa_id LIKE 'teste-dedup-e2e-%'")).rowCount; logReal(`limpeza: ${apagados} registro(s) teste-dedup-e2e- apagados`); await bancoE2E.encerrarBanco(); }
 process.exit(falhas ? 1 : 0);

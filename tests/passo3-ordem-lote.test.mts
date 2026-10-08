@@ -60,6 +60,9 @@ ok(linhaDoTempo.join(" | ") === "início primeira | fim primeira | início segun
 const apagados = (await banco.consultar("DELETE FROM eventos_processados WHERE mensagem_externa_id IN ('teste-dedup-msg-1','teste-dedup-msg-2')")).rowCount;
 const restantes = Number((await banco.consultar("SELECT count(*) n FROM eventos_processados WHERE mensagem_externa_id LIKE 'teste-dedup-%'")).rows[0].n);
 ok(apagados === 2 && restantes === 0, `limpeza: ${apagados} registros apagados; teste-dedup restantes = ${restantes}`);
+const { limparEspelhoDeTeste } = await import(B + "/tests/limpeza-espelho.mts");
+const espelho = await limparEspelhoDeTeste(banco.consultar);
+ok(espelho.restantes === 0, `espelho: ${espelho.atendimentos} atendimento(s) e ${espelho.clientes} cliente(s) de teste apagados; restantes = ${espelho.restantes}`);
 await banco.encerrarBanco();
 out(falhas ? `\n${total} verificações | ${falhas} FALHA(S)` : `\n${total} verificações | TODOS OS TESTES PASSARAM`);
 process.exit(falhas ? 1 : 0);

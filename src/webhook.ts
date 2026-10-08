@@ -54,6 +54,11 @@ import {
   type CanalEvento,
 } from "./eventosProcessados.js";
 
+import {
+  registrarAtividadeAtendimento,
+  registrarEncerramentoAtendimento,
+} from "./persistenciaAtendimento.js";
+
 import type { Cliente, ResultadoIA } from "./tipos.js";
 
 /*
@@ -477,6 +482,11 @@ function criarNovaConversa(senderPhone?: string): Conversa {
 function finalizarConversa(chatId: string, conversa: Conversa): void {
   conversas.delete(chatId);
 
+  /*
+   * Espelho no banco (não bloqueia; nunca lança).
+   */
+  void registrarEncerramentoAtendimento(conversa.atendimentoId);
+
   console.log(
     `Atendimento ${conversa.atendimentoId} encerrado por inatividade.`,
   );
@@ -618,6 +628,21 @@ async function processarMensagemRecebida(payload: EventoMensagem): Promise<void>
     const momentoMensagem = obterMomentoMensagem(payload);
 
     conversa.ultimaMensagemEm = momentoMensagem ?? Date.now();
+
+    /*
+     * Espelho no banco: cria (1ª mensagem) ou atualiza a
+     * última atividade do atendimento com o MESMO codigo.
+     * Dentro da tarefa da fila (ordem preservada), antes da IA
+     * (nenhuma conexão fica presa esperando Claude/Meta/Telegram).
+     * Falha de banco só gera log; o atendimento segue em memória.
+     */
+    await registrarAtividadeAtendimento({
+      codigo: conversa.atendimentoId,
+      chatId,
+      telefone: conversa.cliente.telefone,
+      atividadeEm: conversa.ultimaMensagemEm,
+      encerrado: conversa.vendedorAssumiu,
+    });
 
     /*
      * Sem texto e sem telefone completo (LGPD).
@@ -990,6 +1015,12 @@ export function iniciarWebhook(): void {
    * a IA para de responder essa conversa.
    */
   definirAoAssumirAtendimento((atendimentoId) => {
+    /*
+     * Atendimento assumido sai da IA: a linha do banco é
+     * encerrada (a conversa continua em memória como HUMANO).
+     */
+    void registrarEncerramentoAtendimento(atendimentoId);
+
     for (const conversa of conversas.values()) {
       if (conversa.atendimentoId !== atendimentoId) {
         continue;

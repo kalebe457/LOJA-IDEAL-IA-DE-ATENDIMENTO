@@ -150,8 +150,13 @@ out("\n== Limpeza ==");
 const apagados = (await banco.consultar("DELETE FROM eventos_processados WHERE mensagem_externa_id LIKE 'teste-dedup-%'")).rowCount;
 const depois = Number((await banco.consultar("SELECT count(*) n FROM eventos_processados")).rows[0].n);
 ok(depois === totalAntes, `${apagados} registros 'teste-dedup-' apagados; total na tabela voltou a ${depois} (era ${totalAntes})`);
-const outras = (await banco.consultar("SELECT (SELECT count(*) FROM clientes)+(SELECT count(*) FROM vendedores)+(SELECT count(*) FROM atendimentos)+(SELECT count(*) FROM mensagens) n")).rows[0].n;
-ok(Number(outras) === 0, `nenhuma linha criada em clientes/vendedores/atendimentos/mensagens (${outras})`);
+// Passo 5a: as mensagens agora criam o espelho cliente/atendimento; apaga só o que este teste criou.
+await espera(500);
+const { limparEspelhoDeTeste } = await import(B + "/tests/limpeza-espelho.mts");
+const espelho = await limparEspelhoDeTeste(banco.consultar);
+ok(espelho.restantes === 0, `espelho: ${espelho.atendimentos} atendimento(s) e ${espelho.clientes} cliente(s) de teste apagados; restantes = ${espelho.restantes}`);
+const outras = (await banco.consultar("SELECT (SELECT count(*) FROM vendedores)+(SELECT count(*) FROM mensagens) n")).rows[0].n;
+ok(Number(outras) === 0, `nenhuma linha criada em vendedores/mensagens (${outras})`);
 await banco.encerrarBanco();
 
 out(falhas ? `\n${total} verificações | ${falhas} FALHA(S)` : `\n${total} verificações | TODOS OS TESTES PASSARAM`);
