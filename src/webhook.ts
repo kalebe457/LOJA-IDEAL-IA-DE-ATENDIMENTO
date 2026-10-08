@@ -57,9 +57,16 @@ import {
 import {
   registrarAtividadeAtendimento,
   registrarEncerramentoAtendimento,
+  registrarMensagemProcessada,
+  type MensagemEspelho,
 } from "./persistenciaAtendimento.js";
 
-import type { Cliente, ResultadoIA } from "./tipos.js";
+import type {
+  Cliente,
+  EstadoTriagem,
+  ResultadoIA,
+  StatusAtendimento,
+} from "./tipos.js";
 
 /*
  * Limite máximo do corpo recebido pelo webhook.
@@ -114,6 +121,12 @@ type Conversa = {
    * Última atividade do atendimento.
    */
   ultimaMensagemEm: number;
+
+  /*
+   * Último instante dado a uma mensagem do espelho
+   * (mantém ENTRADA/SAIDA em ordem estrita no banco).
+   */
+  ultimoInstanteEspelho: number;
 };
 
 /*
@@ -396,16 +409,19 @@ function conversaEstaInativa(conversa: Conversa, agora = Date.now()): boolean {
  *
  * META_ENVIO_ATIVO decide entre somente log e envio real.
  *
- * true no retorno = aceito pela Graph API,
- * NÃO é confirmação de entrega.
+ * wamid no retorno = aceito pela Graph API, NÃO é
+ * confirmação de entrega. null = não enviado.
  */
-async function enviarAoCliente(chatId: string, texto: string): Promise<boolean> {
+async function enviarAoCliente(
+  chatId: string,
+  texto: string,
+): Promise<string | null> {
   if (!ehChatMeta(chatId)) {
     console.error(
       `Envio recusado: ${mascararChatId(chatId)} não é uma conversa da Meta.`,
     );
 
-    return false;
+    return null;
   }
 
   if (!metaEnvioAtivo()) {
@@ -413,12 +429,12 @@ async function enviarAoCliente(chatId: string, texto: string): Promise<boolean> 
       `[Meta] resposta não enviada (META_ENVIO_ATIVO=false) | destino: ${descreverDestinoMeta(chatId)} | tamanho: ${texto.length}`,
     );
 
-    return false;
+    return null;
   }
 
   const resultado = await enviarTextoMeta(chatId, texto);
 
-  return resultado.aceito;
+  return resultado.aceito ? resultado.wamid : null;
 }
 
 /**
@@ -469,6 +485,8 @@ function criarNovaConversa(senderPhone?: string): Conversa {
     vendedorAssumiu: false,
 
     ultimaMensagemEm: agora,
+
+    ultimoInstanteEspelho: 0,
   };
 
   console.log("Nova conversa criada");
@@ -566,7 +584,7 @@ async function avisarLojaFechada(chatId: string): Promise<void> {
    */
   const modoSomenteLog = !metaEnvioAtivo();
 
-  const enviado = await enviarAoCliente(chatId, MENSAGEM_LOJA_FECHADA);
+  const enviado = (await enviarAoCliente(chatId, MENSAGEM_LOJA_FECHADA)) !== null;
 
   if (enviado || modoSomenteLog) {
     avisosLojaFechada.set(chatId, periodo);
@@ -577,6 +595,83 @@ async function avisarLojaFechada(chatId: string): Promise<void> {
       `Loja fechada: aviso não entregue para ${mascararChatId(chatId)}; será tentado na próxima mensagem.`,
     );
   }
+}
+
+/**
+ * Instante da próxima mensagem do espelho: nunca igual nem
+ * anterior ao da mensagem anterior da mesma conversa.
+ */
+function proximoInstanteEspelho(conversa: Conversa): number {
+  conversa.ultimoInstanteEspelho = Math.max(
+    Date.now(),
+    conversa.ultimoInstanteEspelho + 1,
+  );
+
+  return conversa.ultimoInstanteEspelho;
+}
+
+/**
+ * Estado da memória que o espelho grava em atendimentos.
+ */
+type EstadoEspelhavel = {
+  codigo: string;
+
+  status: StatusAtendimento;
+
+  triagem: EstadoTriagem;
+
+  resumo: Pick<Cliente["resumo"], "nome" | "produto" | "quantidade" | "observacoes">;
+};
+
+function estadoEspelhavel(conversa: Conversa): EstadoEspelhavel {
+  const { nome, produto, quantidade, observacoes } = conversa.cliente.resumo;
+
+  return {
+    codigo: conversa.atendimentoId,
+
+    status: conversa.cliente.status,
+
+    triagem: conversa.ia.estadoTriagem(),
+
+    resumo: { nome, produto, quantidade, observacoes },
+  };
+}
+
+/**
+ * Cópia do estado espelhável da conversa ativa de um chat
+ * (somente leitura; usada pelos testes para comparar
+ * memória × banco).
+ */
+export function lerEstadoEspelhavel(chatId: string): EstadoEspelhavel | null {
+  const conversa = conversas.get(chatId);
+
+  return conversa ? estadoEspelhavel(conversa) : null;
+}
+
+/**
+ * Espelha no banco o estado FINAL da memória depois de uma
+ * mensagem processada. Falha de banco só gera log.
+ */
+async function espelharMensagem(
+  chatId: string,
+  conversa: Conversa,
+  entrada: MensagemEspelho,
+  saida: MensagemEspelho | null,
+): Promise<void> {
+  const estado = estadoEspelhavel(conversa);
+
+  await registrarMensagemProcessada({
+    codigo: estado.codigo,
+    chatId,
+    telefone: conversa.cliente.telefone,
+    atividadeEm: conversa.ultimaMensagemEm,
+    encerrado: conversa.vendedorAssumiu,
+    status: estado.status,
+    triagem: estado.triagem,
+    resumo: estado.resumo,
+    entrada,
+    saida,
+  });
 }
 
 /**
@@ -649,6 +744,18 @@ async function processarMensagemRecebida(payload: EventoMensagem): Promise<void>
     });
 
     /*
+     * Mensagem do cliente para o espelho (ENTRADA). Gravada junto
+     * com o estado final, depois do processamento.
+     */
+    const chaveExterna = chaveEventoExterno(payload);
+
+    const entrada: MensagemEspelho = {
+      wamid: idRegistravel(chaveExterna) ? chaveExterna : null,
+      texto,
+      em: proximoInstanteEspelho(conversa),
+    };
+
+    /*
      * Sem texto e sem telefone completo (LGPD).
      */
     console.log(
@@ -669,6 +776,8 @@ async function processarMensagemRecebida(payload: EventoMensagem): Promise<void>
       console.log(
         `IA desativada para ${mascararChatId(chatId)}: atendimento humano.`,
       );
+
+      await espelharMensagem(chatId, conversa, entrada, null);
 
       return;
     }
@@ -726,6 +835,8 @@ async function processarMensagemRecebida(payload: EventoMensagem): Promise<void>
        */
       conversa.cliente.resumo = resultado.resumo;
 
+      await espelharMensagem(chatId, conversa, entrada, null);
+
       return;
     }
 
@@ -764,6 +875,8 @@ async function processarMensagemRecebida(payload: EventoMensagem): Promise<void>
 
     let clienteAvisado = false;
 
+    let wamidResposta: string | null = null;
+
     if (modoSomenteLog) {
       console.log(
         `[Meta] resposta não enviada (META_ENVIO_ATIVO=false) | destino: ${descreverDestinoMeta(chatId)} | tamanho: ${resultado.resposta.length}`,
@@ -772,7 +885,9 @@ async function processarMensagemRecebida(payload: EventoMensagem): Promise<void>
       /*
        * Envia a resposta ao cliente (tentativa real).
        */
-      clienteAvisado = await enviarAoCliente(chatId, resultado.resposta);
+      wamidResposta = await enviarAoCliente(chatId, resultado.resposta);
+
+      clienteAvisado = wamidResposta !== null;
     }
 
     if (clienteAvisado) {
@@ -802,6 +917,24 @@ async function processarMensagemRecebida(payload: EventoMensagem): Promise<void>
         );
       }
     }
+
+    /*
+     * Espelho (Passo 5b): estado final, já depois de um
+     * eventual desfazer. A SAIDA só entra se a Meta aceitou
+     * ou em modo somente log (mesma regra da memória).
+     */
+    await espelharMensagem(
+      chatId,
+      conversa,
+      entrada,
+      clienteAvisado || modoSomenteLog
+        ? {
+            wamid: wamidResposta,
+            texto: resultado.resposta,
+            em: proximoInstanteEspelho(conversa),
+          }
+        : null,
+    );
 
     /*
      * Quando a IA conclui o atendimento, o resumo vai

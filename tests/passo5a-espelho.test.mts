@@ -153,7 +153,8 @@ await tg({ update_id: 9002, callback_query: { id: "cb-5a", from: { id: 111, firs
 await espera(800);
 const lc = await linhas(TEL_C);
 ok(logs.some((l) => l.includes(`Atendimento ${codC} assumido por vendedor via Telegram`)), "vendedor assumiu pelo fluxo do Telegram (simulado)");
-ok(lc.length === 1 && lc[0]!.codigo === codC && lc[0]!.encerrado_em !== null && lc[0]!.status === "IA", "linha do banco encerrada na assunção; status continua IA");
+// Desde o 5b o status acompanha a memória: triagem concluída = HUMANO.
+ok(lc.length === 1 && lc[0]!.codigo === codC && lc[0]!.encerrado_em !== null && lc[0]!.status === "HUMANO", "linha do banco encerrada na assunção; status HUMANO (triagem concluída)");
 await mensagem(TEL_C, "mais uma mensagem");
 const lc2 = await linhas(TEL_C);
 ok(lc2.length === 1 && lc2[0]!.encerrado_em !== null, "mensagem depois de assumido não reabre nem cria atendimento");

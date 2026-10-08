@@ -1,4 +1,4 @@
-import type { Cliente, ResultadoIA } from "./tipos.js";
+import type { Cliente, EstadoTriagem, ResultadoIA } from "./tipos.js";
 
 export interface IA {
   responder(mensagem: string, cliente: Cliente): Promise<ResultadoIA>;
@@ -9,4 +9,9 @@ export interface IA {
    * e ela falhou.
    */
   desfazerRespostaNaoEntregue(): void;
+
+  /**
+   * Cópia do estado atual da triagem (para o espelho no banco).
+   */
+  estadoTriagem(): EstadoTriagem;
 }

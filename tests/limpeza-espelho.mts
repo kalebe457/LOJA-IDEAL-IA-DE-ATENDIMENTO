@@ -1,8 +1,8 @@
 // Auxiliar dos testes (NÃO é uma suíte): limpa o espelho de atendimentos criado pelos testes.
 //
 // Todas as mensagens de teste usam o phone_number_id FICTÍCIO "999", então os chat_id de
-// teste começam com "meta:999:". Apaga só esses atendimentos e, depois, só os clientes que
-// ficaram sem nenhum atendimento. Sem TRUNCATE.
+// teste começam com "meta:999:". Apaga só as mensagens e os atendimentos desses chats e, depois,
+// só os clientes que ficaram sem nenhum atendimento. Sem TRUNCATE.
 
 type Consultar = (texto: string, parametros?: unknown[]) => Promise<{ rows: any[]; rowCount: number | null }>;
 
@@ -14,6 +14,12 @@ export async function limparEspelhoDeTeste(
   const ids = (
     await consultar("SELECT DISTINCT cliente_id FROM atendimentos WHERE chat_id LIKE $1", [PREFIXO_CHAT_TESTE + "%"])
   ).rows.map((r) => r.cliente_id);
+
+  // mensagens primeiro: FK RESTRICT para atendimentos.
+  await consultar(
+    "DELETE FROM mensagens WHERE atendimento_id IN (SELECT id FROM atendimentos WHERE chat_id LIKE $1)",
+    [PREFIXO_CHAT_TESTE + "%"],
+  );
 
   const atendimentos =
     (await consultar("DELETE FROM atendimentos WHERE chat_id LIKE $1", [PREFIXO_CHAT_TESTE + "%"])).rowCount ?? 0;

@@ -57,8 +57,8 @@ Garantido por `tests/passo3-ordem-lote.test.mts`.
 ## Plano
 
 - Feitos: dedup persistente (3), remoção do OpenWA (4), testes versionados (4.5), espelho de
-  cliente/atendimento (5a) e proteção contra colisão de codigo e banco travado (5a.1).
-- Próximos: **5b** estado da triagem no banco · **5c** assunção (lock) no PostgreSQL ·
-  **5d** recuperação após restart.
+  cliente/atendimento (5a), proteção contra colisão de codigo e banco travado (5a.1) e
+  estado da triagem + mensagens ENTRADA/SAIDA espelhados após cada mensagem (5b).
+- Próximos: **5c** assunção (lock) no PostgreSQL · **5d** recuperação após restart.
 - Antes de produção: número exclusivo da IA, URL HTTPS fixa, credencial permanente da Meta,
   política de retenção/LGPD.

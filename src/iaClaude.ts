@@ -8,6 +8,7 @@ import type { IA } from "./ia.js";
 
 import type {
   Cliente,
+  EstadoTriagem,
   ResultadoIA,
   ResumoCliente,
   StatusAtendimento,
@@ -662,6 +663,12 @@ export class IAClaude implements IA {
   private apresentacaoPendente = false;
 
   /**
+   * A quantidade foi dispensada por não fazer sentido
+   * para o pedido? Só informativo (espelho no banco).
+   */
+  private quantidadeNaoAplicavel = false;
+
+  /**
    * O que a última resposta registrou como entregue.
    *
    * Usado somente para desfazer quando o envio falha.
@@ -717,6 +724,40 @@ export class IAClaude implements IA {
     this.resumoAtual = criarResumoVazio(cliente.telefone);
 
     this.apresentacaoPendente = true;
+
+    this.quantidadeNaoAplicavel = false;
+  }
+
+  /**
+   * Cópia do estado da triagem, no formato das
+   * colunas de atendimentos (espelho no banco).
+   *
+   * Concluídas = campos preenchidos + etapas puladas.
+   * Só a primeira etapa não concluída pode ter perguntas
+   * feitas (as etapas são perguntadas em ordem).
+   */
+  estadoTriagem(): EstadoTriagem {
+    const resumo = this.resumoAtual;
+
+    const etapasPuladas = ORDEM_ETAPAS.filter(
+      (etapa) =>
+        this.etapasConcluidas.has(etapa) &&
+        !(resumo && campoPreenchido(resumo[etapa])),
+    );
+
+    const proxima = encontrarProximaEtapa(this.etapasConcluidas);
+
+    return {
+      etapaAtual: this.etapaAtual,
+
+      perguntasEtapa: proxima ? (this.perguntasPorEtapa.get(proxima) ?? 0) : 0,
+
+      etapasPuladas,
+
+      apresentacaoPendente: this.apresentacaoPendente,
+
+      quantidadeNaoAplicavel: this.quantidadeNaoAplicavel,
+    };
   }
 
   /**
@@ -1018,6 +1059,10 @@ export class IAClaude implements IA {
      * quando não faz sentido para o pedido.
      */
     if (saida.quantidade_aplicavel === false) {
+      if (!this.etapasConcluidas.has("quantidade")) {
+        this.quantidadeNaoAplicavel = true;
+      }
+
       this.etapasConcluidas.add("quantidade");
     }
 
