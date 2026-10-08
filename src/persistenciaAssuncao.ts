@@ -120,7 +120,9 @@ export type DadosAssuncao = {
 
 /*
  * - "assumido": o banco registrou este vendedor;
- * - "ja_por_voce": o banco já tinha ESTE vendedor;
+ * - "ja_por_voce": o banco já tinha ESTE vendedor, com a DM ENVIADA;
+ * - "ja_por_voce_dm_pendente": ESTE vendedor, mas a DM não consta
+ *   como ENVIADA (ENVIANDO ou FALHOU): a DM deve ser reenviada;
  * - "ja_por_outro": o banco já tinha OUTRO vendedor (o banco vence);
  * - "sem_linha": o atendimento não está no banco (espelho falhou);
  * - "erro": falha de banco (já logada com o código).
@@ -128,6 +130,7 @@ export type DadosAssuncao = {
 export type ResultadoAssuncaoBanco =
   | "assumido"
   | "ja_por_voce"
+  | "ja_por_voce_dm_pendente"
   | "ja_por_outro"
   | "sem_linha"
   | "erro";
@@ -177,8 +180,8 @@ export async function registrarAssuncao(
         return "assumido";
       }
 
-      const atual = await conexao.query<{ vendedor_id: string | null }>(
-        "SELECT vendedor_id FROM atendimentos WHERE codigo = $1",
+      const atual = await conexao.query<{ vendedor_id: string | null; dm_status: string | null }>(
+        "SELECT vendedor_id, dm_status FROM atendimentos WHERE codigo = $1",
         [dados.codigo],
       );
 
@@ -188,13 +191,17 @@ export async function registrarAssuncao(
         return "sem_linha";
       }
 
-      return linha.vendedor_id === vendedorId ? "ja_por_voce" : "ja_por_outro";
+      if (linha.vendedor_id !== vendedorId) {
+        return "ja_por_outro";
+      }
+
+      return linha.dm_status === "ENVIADA" ? "ja_por_voce" : "ja_por_voce_dm_pendente";
     },
     /*
      * Sem linha ou com outro vendedor: nada é gravado
      * (nem o vendedor, que ficaria sem atendimento).
      */
-    (valor) => valor === "assumido" || valor === "ja_por_voce",
+    (valor) => valor === "assumido" || valor === "ja_por_voce" || valor === "ja_por_voce_dm_pendente",
   );
 
   return resultado.ok ? resultado.valor : "erro";

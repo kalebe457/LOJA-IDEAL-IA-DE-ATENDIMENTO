@@ -198,6 +198,20 @@ O telefone do cliente nunca deve ser preenchido pelo Claude.
 Esse campo é controlado pelo sistema.
 `.trim();
 
+/*
+ * Estado lido do banco para reconstruir o atendimento
+ * (Passo 5d).
+ */
+export type EstadoRestauradoIA = {
+  triagem: EstadoTriagem;
+
+  resumo: ResumoCliente;
+
+  historico: { papel: "user" | "assistant"; texto: string }[];
+
+  ultimaMensagemEm: number;
+};
+
 type SaidaClaude = {
   resposta: string;
 
@@ -747,6 +761,57 @@ export class IAClaude implements IA {
     this.apresentacaoPendente = true;
 
     this.quantidadeNaoAplicavel = false;
+  }
+
+  /**
+   * Reconstrói o atendimento atual a partir do banco
+   * (recuperação na partida, Passo 5d).
+   *
+   * Etapas concluídas = campos preenchidos + etapas puladas.
+   * As perguntas gravadas são da primeira etapa não concluída.
+   * ultimoTurno não volta: só serve para desfazer a resposta
+   * do turno corrente, e todo turno novo o zera.
+   */
+  restaurar(estado: EstadoRestauradoIA): void {
+    this.atendimentoIniciado = true;
+
+    this.historico.length = 0;
+
+    for (const item of estado.historico) {
+      this.historico.push({ role: item.papel, content: item.texto });
+    }
+
+    this.indiceInicioAtendimento = 0;
+
+    const resumo: ResumoCliente = { ...estado.resumo };
+
+    this.resumoAtual = resumo;
+
+    this.etapasConcluidas.clear();
+
+    for (const etapa of estado.triagem.etapasPuladas) {
+      this.etapasConcluidas.add(etapa);
+    }
+
+    marcarEtapasPreenchidas(resumo, this.etapasConcluidas);
+
+    this.etapaAtual = estado.triagem.etapaAtual;
+
+    this.perguntasPorEtapa.clear();
+
+    const proxima = encontrarProximaEtapa(this.etapasConcluidas);
+
+    if (proxima && estado.triagem.perguntasEtapa > 0) {
+      this.perguntasPorEtapa.set(proxima, estado.triagem.perguntasEtapa);
+    }
+
+    this.apresentacaoPendente = estado.triagem.apresentacaoPendente;
+
+    this.quantidadeNaoAplicavel = estado.triagem.quantidadeNaoAplicavel;
+
+    this.ultimaMensagemEm = estado.ultimaMensagemEm;
+
+    this.ultimoTurno = null;
   }
 
   /**

@@ -42,11 +42,23 @@ import {
   definirAoAssumirAtendimento,
   enviarResumoTelegram,
   processarUpdateTelegram,
+  reenviarPendenciasRecuperadas,
+  redefinirEstadoTelegramParaTestes,
   reenviarResumosTelegramPendentes,
+  restaurarEstadoTelegram,
   segredoWebhookTelegramValido,
   telegramConfigurado,
   type TelegramUpdate,
 } from "./telegramBot.js";
+
+import { lerTelegramResumoTtlHoras } from "./configTelegram.js";
+
+import {
+  lerDadosRecuperacao,
+  type ConversaRecuperada,
+  type DadosRecuperacao,
+  type ResumoRecuperado,
+} from "./persistenciaRecuperacao.js";
 
 import {
   idRegistravel,
@@ -1144,38 +1156,215 @@ async function processarEvento(payload: EventoMensagem): Promise<void> {
   await processarMensagemRecebida(payload);
 }
 
+/*
+ * Tempo máximo da recuperação na partida. Estourou: sobe com a
+ * memória vazia (nunca deixa de subir por causa do banco).
+ */
+const LIMITE_RECUPERACAO_MS = 30_000;
+
+function descreverErroCurto(erro: unknown): string {
+  const codigo = (erro as { code?: unknown } | null)?.code;
+
+  if (typeof codigo === "string") {
+    return codigo;
+  }
+
+  return erro instanceof Error ? erro.name : "erro desconhecido";
+}
+
+/**
+ * Monta a conversa em memória a partir do banco.
+ *
+ * Assumida (vendedor já registrado): a IA continua calada, como
+ * a memória faria até a inatividade. Nunca reabre para a IA.
+ */
+function montarConversaRecuperada(c: ConversaRecuperada): Conversa {
+  const resumo: Cliente["resumo"] = {
+    nome: c.nome ?? "Não informado",
+    telefone: c.telefone,
+    produto: c.produto ?? "Não informado",
+    quantidade: c.quantidade ?? "Não informado",
+    observacoes: c.observacoes ?? "Não informado",
+  };
+
+  const ia = new IAClaude(c.codigo);
+
+  ia.restaurar({
+    triagem: {
+      etapaAtual: c.etapaAtual,
+      perguntasEtapa: c.perguntasEtapa,
+      etapasPuladas: c.etapasPuladas,
+      apresentacaoPendente: c.apresentacaoPendente,
+      quantidadeNaoAplicavel: c.quantidadeNaoAplicavel,
+    },
+    resumo,
+    historico: c.historico.map((m) => ({
+      papel: m.direcao === "ENTRADA" ? "user" : "assistant",
+      texto: m.texto,
+    })),
+    ultimaMensagemEm: c.ultimaAtividadeEm,
+  });
+
+  return {
+    cliente: {
+      telefone: c.telefone,
+      status: c.assumida ? "HUMANO" : c.status,
+      resumo: { ...resumo },
+    },
+    ia,
+    atendimentoId: c.codigo,
+    vendedorAssumiu: c.assumida,
+    ultimaMensagemEm: c.ultimaAtividadeEm,
+    ultimoInstanteEspelho: c.ultimaMensagemEm,
+  };
+}
+
+export type ResultadoRecuperacao =
+  | { ok: true; conversas: number; resumosNaoPublicados: ResumoRecuperado[] }
+  | { ok: false };
+
+/**
+ * Recuperação na partida (Passo 5d): lê o banco UMA vez e monta a
+ * memória (conversas, lock e resumos do Telegram). Nunca lança.
+ *
+ * Exportada também para os testes simularem um reinício.
+ */
+export async function recuperarNaPartida(): Promise<ResultadoRecuperacao> {
+  const phoneNumberId = (process.env.META_PHONE_NUMBER_ID ?? "").trim();
+
+  if (!/^\d+$/.test(phoneNumberId)) {
+    console.error("[Recuperação] ATENÇÃO: META_PHONE_NUMBER_ID ausente ou inválido; subindo com a memória vazia.");
+
+    return { ok: false };
+  }
+
+  let ttlResumoMs: number | null = null;
+
+  if (telegramConfigurado()) {
+    try {
+      ttlResumoMs = lerTelegramResumoTtlHoras() * 60 * 60 * 1000;
+    } catch {
+      console.error("[Recuperação] TELEGRAM_RESUMO_TTL_HORAS inválido: resumos do Telegram não recuperados.");
+    }
+  }
+
+  const inicio = Date.now();
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const leitura = lerDadosRecuperacao({
+    phoneNumberId,
+    agora: Date.now(),
+    inatividadeMs: INATIVIDADE_MS,
+    ttlResumoMs,
+  });
+
+  let dados: DadosRecuperacao;
+
+  try {
+    const resultado = await Promise.race([
+      leitura,
+      new Promise<"limite">((resolve) => {
+        timer = setTimeout(() => resolve("limite"), LIMITE_RECUPERACAO_MS);
+      }),
+    ]);
+
+    if (resultado === "limite") {
+      leitura.catch(() => undefined);
+
+      console.error(
+        `[Recuperação] ATENÇÃO: recuperação passou de ${LIMITE_RECUPERACAO_MS / 1000} s; subindo com a memória vazia.`,
+      );
+
+      return { ok: false };
+    }
+
+    dados = resultado;
+  } catch (erro: unknown) {
+    console.error(
+      `[Recuperação] ATENÇÃO: banco indisponível na partida (${descreverErroCurto(erro)}); subindo com a memória vazia.`,
+    );
+
+    return { ok: false };
+  } finally {
+    clearTimeout(timer);
+  }
+
+  for (const c of dados.conversas) {
+    conversas.set(c.chatId, montarConversaRecuperada(c));
+  }
+
+  const telegram = restaurarEstadoTelegram(dados);
+
+  console.log(
+    [
+      "[Recuperação] concluída",
+      `conversas recuperadas: ${dados.conversas.length}`,
+      `encerradas por inatividade: ${dados.encerradosPorInatividade}`,
+      `resumos no lock: ${telegram.resumos}`,
+      `resumos fora do TTL/grupo: ${telegram.descartados}`,
+      `resumos a publicar: ${dados.resumosNaoPublicados.length}`,
+      `vendedores: ${telegram.vendedores}`,
+      `tempo: ${Date.now() - inicio} ms`,
+    ].join(" | "),
+  );
+
+  return {
+    ok: true,
+    conversas: dados.conversas.length,
+    resumosNaoPublicados: dados.resumosNaoPublicados,
+  };
+}
+
+/**
+ * Vendedor venceu o lock no Telegram: a IA para de responder
+ * essa conversa.
+ *
+ * A linha do banco (vendedor, HUMANO, encerrado_em) já foi
+ * gravada pela assunção em telegramBot.ts (Passo 5c). A
+ * conversa continua em memória como HUMANO.
+ */
+function marcarAssumidoNaMemoria(atendimentoId: string): void {
+  for (const conversa of conversas.values()) {
+    if (conversa.atendimentoId !== atendimentoId) {
+      continue;
+    }
+
+    conversa.vendedorAssumiu = true;
+
+    conversa.cliente.status = "HUMANO";
+
+    console.log(`Atendimento ${atendimentoId} assumido por vendedor via Telegram.`);
+
+    return;
+  }
+
+  console.log(
+    `Atendimento ${atendimentoId} assumido via Telegram; conversa já encerrada na memória.`,
+  );
+}
+
+/**
+ * Somente para testes: zera a memória do webhook e do Telegram
+ * (simula o processo morrendo antes de uma nova recuperação).
+ */
+export function redefinirEstadoWebhookParaTestes(): void {
+  conversas.clear();
+
+  conversationQueues.clear();
+
+  avisosLojaFechada.clear();
+
+  redefinirEstadoTelegramParaTestes();
+
+  definirAoAssumirAtendimento(marcarAssumidoNaMemoria);
+}
+
 /**
  * Inicia o servidor do webhook.
  */
-export function iniciarWebhook(): void {
-  /*
-   * Vendedor venceu o lock no Telegram:
-   * a IA para de responder essa conversa.
-   */
-  definirAoAssumirAtendimento((atendimentoId) => {
-    /*
-     * A linha do banco (vendedor, HUMANO, encerrado_em) já foi
-     * gravada pela assunção em telegramBot.ts (Passo 5c). A
-     * conversa continua em memória como HUMANO.
-     */
-    for (const conversa of conversas.values()) {
-      if (conversa.atendimentoId !== atendimentoId) {
-        continue;
-      }
-
-      conversa.vendedorAssumiu = true;
-
-      conversa.cliente.status = "HUMANO";
-
-      console.log(`Atendimento ${atendimentoId} assumido por vendedor via Telegram.`);
-
-      return;
-    }
-
-    console.log(
-      `Atendimento ${atendimentoId} assumido via Telegram; conversa já encerrada na memória.`,
-    );
-  });
+export async function iniciarWebhook(): Promise<void> {
+  definirAoAssumirAtendimento(marcarAssumidoNaMemoria);
 
   const server = createServer(async (request, response) => {
     try {
@@ -1378,16 +1567,47 @@ export function iniciarWebhook(): void {
     }
   });
 
-  server.listen(PORT, () => {
-    console.log(`Backend ouvindo na porta ${PORT}`);
+  /*
+   * ORDEM DA PARTIDA (Passo 5d): a recuperação termina ANTES do
+   * listen, para nenhuma mensagem chegar numa memória vazia (a
+   * Meta e o Telegram reenviam o que não foi aceito). Banco fora
+   * ou lento: sobe com a memória vazia, como antes.
+   */
+  const recuperacao = await recuperarNaPartida();
 
-    console.log("Endpoint: GET/POST /meta/webhook");
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
 
-    console.log("Endpoint: POST /telegram/webhook");
+    server.listen(PORT, () => {
+      server.off("error", reject);
+
+      console.log(`Backend ouvindo na porta ${PORT}`);
+
+      console.log("Endpoint: GET/POST /meta/webhook");
+
+      console.log("Endpoint: POST /telegram/webhook");
+
+      resolve();
+    });
   });
 
   /*
-   * Verifica inatividade a cada 30 segundos.
+   * Pendências do Telegram (resumos não publicados, DMs não
+   * entregues): depois do listen, sem bloquear a partida.
+   */
+  if (recuperacao.ok) {
+    reenviarPendenciasRecuperadas(recuperacao.resumosNaoPublicados)
+      .then(({ resumos, dms }) => {
+        console.log(`[Recuperação] pendências reenviadas | resumos publicados: ${resumos} | DMs reenviadas: ${dms}`);
+      })
+      .catch((erro: unknown) => {
+        console.error(`[Recuperação] falha ao reenviar pendências (${descreverErroCurto(erro)}).`);
+      });
+  }
+
+  /*
+   * Verifica inatividade a cada 30 segundos
+   * (vale também para as conversas recuperadas).
    */
   setInterval(verificarInatividade, VERIFICACAO_INATIVIDADE_MS);
 

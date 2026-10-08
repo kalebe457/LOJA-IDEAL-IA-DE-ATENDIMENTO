@@ -14,6 +14,11 @@ import {
   registrarResumoPublicado,
 } from "./persistenciaAssuncao.js";
 
+import type {
+  ResumoRecuperado,
+  VendedorRecuperado,
+} from "./persistenciaRecuperacao.js";
+
 import type { ResumoCliente } from "./tipos.js";
 
 /*
@@ -250,6 +255,131 @@ export function redefinirEstadoTelegramParaTestes(): void {
   lock = criarLock();
 
   aoAssumir = () => undefined;
+}
+
+function resumoRecuperado(r: ResumoRecuperado): ResumoCliente {
+  return {
+    nome: r.nome ?? "Não informado",
+    telefone: r.telefone,
+    produto: r.produto ?? "Não informado",
+    quantidade: r.quantidade ?? "Não informado",
+    observacoes: r.observacoes ?? "Não informado",
+  };
+}
+
+/**
+ * Recuperação na partida (Passo 5d): devolve à memória os
+ * vendedores e os resumos publicados dentro do TTL, para o
+ * botão ASSUMIR continuar valendo. Os TTLs do lock contam dos
+ * horários reais. DM que não consta como ENVIADA (ENVIANDO ou
+ * FALHOU) volta como "falhou" e é reenviada depois.
+ */
+export function restaurarEstadoTelegram(dados: {
+  vendedores: VendedorRecuperado[];
+  resumosPublicados: ResumoRecuperado[];
+}): { vendedores: number; resumos: number; descartados: number } {
+  let quantosVendedores = 0;
+
+  for (const v of dados.vendedores) {
+    const userId = normalizarIdTelegram(v.userId);
+
+    if (!userId || !Number.isSafeInteger(v.chatPrivadoId)) {
+      continue;
+    }
+
+    vendedores.set(userId, { userId, nome: v.nome, chatPrivadoId: v.chatPrivadoId });
+
+    quantosVendedores++;
+  }
+
+  let resumos = 0;
+
+  let descartados = 0;
+
+  for (const r of dados.resumosPublicados) {
+    /*
+     * Só cliques no grupo configurado valem.
+     */
+    if (
+      r.telegramChatId !== config().chatId ||
+      r.telegramMessageId === null ||
+      r.resumoEnviadoEm === null ||
+      atendimentos.has(r.codigo)
+    ) {
+      descartados++;
+
+      continue;
+    }
+
+    if (!lock.restaurar(r.codigo, r.chatId, r.vendedorUserId, r.resumoEnviadoEm, r.assumidoEm)) {
+      descartados++;
+
+      continue;
+    }
+
+    atendimentos.set(r.codigo, {
+      atendimentoId: r.codigo,
+      chatIdCliente: r.chatId,
+      resumo: resumoRecuperado(r),
+      envioResumo: "enviado",
+      mensagemGrupoId: r.telegramMessageId,
+      vendedorId: r.vendedorUserId,
+      vendedorNome: r.vendedorNome,
+      dm: r.dmStatus === "ENVIADA" ? "enviada" : r.dmStatus === null ? "pendente" : "falhou",
+      criadoEm: r.resumoEnviadoEm,
+    });
+
+    resumos++;
+  }
+
+  return { vendedores: quantosVendedores, resumos, descartados };
+}
+
+/**
+ * Depois da recuperação (sem bloquear a partida): publica os
+ * resumos que ficaram sem publicar e reenvia as DMs que não
+ * constam como enviadas.
+ */
+export async function reenviarPendenciasRecuperadas(
+  naoPublicados: ResumoRecuperado[],
+): Promise<{ resumos: number; dms: number }> {
+  let resumos = 0;
+
+  let dms = 0;
+
+  if (!telegramConfigurado()) {
+    return { resumos, dms };
+  }
+
+  for (const r of naoPublicados) {
+    if (await enviarResumoTelegram(r.codigo, r.chatId, resumoRecuperado(r))) {
+      resumos++;
+    }
+  }
+
+  for (const atd of [...atendimentos.values()]) {
+    if (atd.vendedorId === null || atd.dm !== "falhou") {
+      continue;
+    }
+
+    const vendedor = vendedores.get(atd.vendedorId);
+
+    if (!vendedor) {
+      console.error(
+        `[Recuperação] DM de ${atd.atendimentoId} não reenviada: vendedor sem chat privado registrado.`,
+      );
+
+      continue;
+    }
+
+    if (await enviarDMVencedor(atd, vendedor)) {
+      dms++;
+
+      await atualizarMensagemGrupo(atd);
+    }
+  }
+
+  return { resumos, dms };
 }
 
 /**
@@ -910,10 +1040,22 @@ async function processarCallback(callback: TelegramCallbackQuery): Promise<void>
        * O banco já tinha ESTE vendedor (depois de um reinício):
        * mesma resposta de hoje para "já assumido por você".
        */
-      if (banco === "ja_por_voce") {
-        atd.dm = "enviada";
-
+      if (banco === "ja_por_voce" || banco === "ja_por_voce_dm_pendente") {
         await responderCallback(callback.id, "Você já assumiu este atendimento.");
+
+        /*
+         * A DM não consta como ENVIADA no banco (ENVIANDO ou
+         * FALHOU): reenvia. Duplicar é aceitável; perder não.
+         */
+        if (banco === "ja_por_voce_dm_pendente") {
+          const ok = await enviarDMVencedor(atd, vendedor);
+
+          if (ok) {
+            await atualizarMensagemGrupo(atd);
+          }
+        } else {
+          atd.dm = "enviada";
+        }
 
         return;
       }

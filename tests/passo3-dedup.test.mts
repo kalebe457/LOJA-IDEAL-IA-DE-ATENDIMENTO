@@ -48,6 +48,9 @@ await new Promise((r) => setTimeout(r, 400));
 
 let falhas = 0, total = 0;
 const ok = (c: boolean, t: string) => { total++; if (!c) falhas++; out(`${c ? "OK  " : "FAIL"} ${t}`); };
+// vendedores/mensagens podem ter linhas reais: compara antes × depois.
+const contarOutras = async () => Number((await banco.consultar("SELECT (SELECT count(*) FROM vendedores)+(SELECT count(*) FROM mensagens) n")).rows[0].n);
+const outrasAntes = await contarOutras();
 const espera = (ms = 400) => new Promise((r) => setTimeout(r, ms));
 const linhas = async (canal: string, id: string) => Number((await banco.consultar("SELECT count(*) n FROM eventos_processados WHERE canal=$1 AND mensagem_externa_id=$2", [canal, id])).rows[0].n);
 const seg = () => String(Math.floor(Date.now() / 1000));
@@ -155,8 +158,8 @@ await espera(500);
 const { limparEspelhoDeTeste } = await import(B + "/tests/limpeza-espelho.mts");
 const espelho = await limparEspelhoDeTeste(banco.consultar);
 ok(espelho.restantes === 0, `espelho: ${espelho.atendimentos} atendimento(s) e ${espelho.clientes} cliente(s) de teste apagados; restantes = ${espelho.restantes}`);
-const outras = (await banco.consultar("SELECT (SELECT count(*) FROM vendedores)+(SELECT count(*) FROM mensagens) n")).rows[0].n;
-ok(Number(outras) === 0, `nenhuma linha criada em vendedores/mensagens (${outras})`);
+const outras = (await contarOutras()) - outrasAntes;
+ok(outras === 0, `nenhuma linha criada em vendedores/mensagens (${outras})`);
 await banco.encerrarBanco();
 
 out(falhas ? `\n${total} verificações | ${falhas} FALHA(S)` : `\n${total} verificações | TODOS OS TESTES PASSARAM`);

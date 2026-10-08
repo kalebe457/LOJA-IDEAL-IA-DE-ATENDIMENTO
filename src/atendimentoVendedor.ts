@@ -307,6 +307,61 @@ export class RegistroAtendimentosVendedor {
   }
 
   /**
+   * Restaura um atendimento lido do banco na partida (Passo 5d),
+   * com os horários REAIS: os TTLs contam de quando o resumo foi
+   * publicado / assumido, não da partida.
+   *
+   * responsavel null = pendente. Devolve true se ficou registrado
+   * (false: inválido, já existe, expirado ou cortado pelo teto).
+   */
+  restaurar(
+    atendimentoId: string,
+    chatId: string,
+    responsavel: string | null,
+    criadoEm: number,
+    assumidoEm: number | null,
+  ): boolean {
+    if (atendimentoId.trim() === "" || chatId.trim() === "" || this.itens.has(atendimentoId)) {
+      return false;
+    }
+
+    const numero = responsavel === null ? null : this.normalizarVendedor(responsavel);
+
+    if (numero === "" || (numero !== null && assumidoEm === null)) {
+      return false;
+    }
+
+    const registro: RegistroAtendimento = {
+      atendimentoId,
+      chatId,
+      estado: numero === null ? EstadoAtendimento.PENDENTE : EstadoAtendimento.ASSUMIDO,
+      responsavel: numero,
+      criadoEm,
+      assumidoEm: numero === null ? null : assumidoEm,
+    };
+
+    if (this.expirado(registro, this.agora())) {
+      return false;
+    }
+
+    this.itens.set(atendimentoId, registro);
+
+    let ids = this.porChat.get(chatId);
+
+    if (!ids) {
+      ids = new Set();
+
+      this.porChat.set(chatId, ids);
+    }
+
+    ids.add(atendimentoId);
+
+    this.aplicarTeto();
+
+    return this.itens.has(atendimentoId);
+  }
+
+  /**
    * Desfaz a atribuição a ESTE vendedor (volta a pendente).
    *
    * Só para quando o banco já registra OUTRO vendedor

@@ -26,6 +26,8 @@ const SUITES = [
   "passo5a-espelho.test.mts",
   "passo5b-triagem.test.mts",
   "passo5c-assuncao.test.mts",
+  "passo5d-recuperacao.test.mts",
+  "passo5d-reinicio.test.mts",
   "telegram.test.mts",
   "rota-telegram.test.mts",
   "passo2-grupo.test.mts",

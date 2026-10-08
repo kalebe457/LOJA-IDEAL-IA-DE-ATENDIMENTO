@@ -21,6 +21,19 @@ vendedores no Telegram → vendedor assume e continua a venda pelo WhatsApp dele
   verdade**; o banco segue pelo `codigo` (`ATD-` + 10 hex). Falha no espelho só gera log.
 - Migrations em `sql/` (001, 002 já aplicadas). Nunca editar migration aplicada; mudança = nova.
 
+## Partida (Passo 5d)
+
+`iniciarWebhook()`: registra o gancho da assunção → **recupera do banco** (uma leitura, só chats
+`meta:<META_PHONE_NUMBER_ID>:`, limite de 30 s) → `listen` → reenvia pendências (resumos não
+publicados, DMs não ENVIADAS) sem bloquear → verificações periódicas. Recupera: conversas
+abertas (e assumidas com atividade < 20 min, com a IA calada); fecha as abertas inativas;
+resumos dentro do TTL (o mais restrito entre `TELEGRAM_RESUMO_TTL_HORAS` e o lock de 24 h) e
+os vendedores da tabela. Banco fora ou lento: aviso em destaque e sobe com a memória vazia.
+Vendedor que nunca assumiu não está no banco: depois de reiniciar, precisa do `/start` de novo.
+
+**Limitação conhecida:** um evento registrado em `eventos_processados` que estava na fila quando
+o processo morreu se perde (o texto não é guardado e a reentrega da Meta vira "duplicada").
+
 ## Segurança (inegociável)
 
 - **Nunca tocar no banco `betgestor`** (mesmo servidor PostgreSQL). Confirmar `current_database()`.
@@ -43,9 +56,11 @@ Garantido por `tests/passo3-ordem-lote.test.mts`.
 - Credenciais FALSAS definidas antes dos imports; `fetch` simulado/bloqueado (só `127.0.0.1`).
   Podem ler `DB_*` do `.env` em tempo de execução, nunca copiar valores.
 - Mensagens de teste usam `phone_number_id` fictício `999` → `chat_id` `meta:999:<tel fictício>`.
-  IDs externos com prefixo `teste-`; vendedores de teste com `telegram_user_id` 990000000001+. Limpeza só do que o teste criou, com `DELETE` filtrado
-  (`tests/limpeza-espelho.mts`); **nunca `TRUNCATE`**. Falha de banco é simulada, nunca parando
-  o PostgreSQL.
+  IDs externos com prefixo `teste-`; vendedores de teste com `telegram_user_id` 990000000001+.
+  Limpeza só do que o teste criou, com `DELETE` filtrado (`tests/limpeza-espelho.mts`); **nunca
+  `TRUNCATE`**. Falha de banco é simulada, nunca parando o PostgreSQL. O reinício real usa o
+  backend num processo filho (`tests/processo-backend-teste.mts`). Não cortar a saída de uma
+  suíte com `| head`: o processo morre antes da limpeza.
 - O `tsconfig.json` não tem `include`: `tsc` também checa `tests/` — manter os testes tipados.
 
 ## Como trabalhar
@@ -63,7 +78,6 @@ Garantido por `tests/passo3-ordem-lote.test.mts`.
 - Feitos: dedup persistente (3), remoção do OpenWA (4), testes versionados (4.5), espelho de
   cliente/atendimento (5a), proteção contra colisão de codigo e banco travado (5a.1) e
   estado da triagem + mensagens ENTRADA/SAIDA espelhados após cada mensagem (5b), assunção,
-  resumo publicado e DM gravados no banco + `/ranking` (5c).
-- Próximo: **5d** recuperação após restart.
+  resumo publicado e DM gravados no banco + `/ranking` (5c) e recuperação na partida (5d).
 - Antes de produção: número exclusivo da IA, URL HTTPS fixa, credencial permanente da Meta,
   política de retenção/LGPD.
