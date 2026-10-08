@@ -3,7 +3,7 @@ import { lerChatIdMeta } from "./metaWebhook.js";
 /*
  * Envio de mensagens de texto pela WhatsApp Cloud API.
  *
- * Totalmente separado do OpenWA.
+ * Único canal de envio ao cliente no MVP.
  *
  * IMPORTANTE:
  *

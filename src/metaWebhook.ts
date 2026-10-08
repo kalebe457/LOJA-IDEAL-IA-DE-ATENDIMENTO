@@ -1,6 +1,6 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
-import type { OpenWAEvent } from "./webhook.js";
+import type { EventoMensagem } from "./webhook.js";
 
 /*
  * Segredos da integração com a WhatsApp Cloud API (Meta).
@@ -99,10 +99,8 @@ export type RespostaVerificacaoMeta = {
 };
 
 /*
- * Prefixo do chatId das conversas da Meta.
- *
- * Mantém essas conversas separadas das do OpenWA
- * e impede que sejam enviadas pelo OpenWA.
+ * Prefixo do chatId das conversas da Meta
+ * (meta:<phone_number_id>:<wa_id>).
  */
 const PREFIXO_CHAT_META = "meta:";
 
@@ -334,19 +332,16 @@ export function listarStatusesMeta(payload: MetaWebhookPayload): MetaStatus[] {
 }
 
 /**
- * Converte messages[] da Cloud API para o mesmo
- * formato de evento que o OpenWA entrega ao
- * núcleo de atendimento.
- *
- * Assim a triagem, a fila, IA/HUMANO e os filtros
- * de eventos antigos são reaproveitados sem duplicação.
+ * Converte messages[] da Cloud API para o formato
+ * interno de evento do núcleo de atendimento
+ * (EventoMensagem), na ordem original do payload.
  *
  * statuses[] não viram eventos.
  */
 export function normalizarMensagensMeta(
   payload: MetaWebhookPayload,
-): OpenWAEvent[] {
-  const eventos: OpenWAEvent[] = [];
+): EventoMensagem[] {
+  const eventos: EventoMensagem[] = [];
 
   if (payload.object !== "whatsapp_business_account") {
     return eventos;
@@ -402,10 +397,6 @@ export function normalizarMensagensMeta(
             ...(mensagem.timestamp !== undefined
               ? { timestamp: mensagem.timestamp }
               : {}),
-
-            isGroup: false,
-
-            fromMe: false,
           },
         });
       }

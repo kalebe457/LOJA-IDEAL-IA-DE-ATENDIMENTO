@@ -9,7 +9,10 @@ import { consultar } from "./banco.js";
  * registrado, e uma nova chegada do mesmo ID é duplicata.
  *
  * NÃO vale para statuses[] da Meta (trazem o mesmo wamid da
- * mensagem original) nem para message.sent do OpenWA.
+ * mensagem original).
+ *
+ * O canal OPENWA continua aceito (tipo e CHECK do banco), mas o
+ * backend não produz mais eventos desse canal.
  *
  * O registro acontece ANTES do processamento: se o backend cair
  * entre o INSERT e o processamento, o evento não é reprocessado

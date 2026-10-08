@@ -1,6 +1,6 @@
 import "dotenv/config";
 
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes } from "node:crypto";
 
 import {
   createServer,
@@ -79,65 +79,10 @@ const INATIVIDADE_MS = 20 * 60 * 1000;
 const VERIFICACAO_INATIVIDADE_MS = 30_000;
 
 /*
- * Segredos e configurações do OpenWA.
- */
-const OPENWA_WEBHOOK_SECRET = process.env.OPENWA_WEBHOOK_SECRET ?? "";
-
-const OPENWA_API_URL = process.env.OPENWA_API_URL ?? "http://localhost:2785";
-
-const OPENWA_SESSION_ID = process.env.OPENWA_SESSION_ID ?? "";
-
-const OPENWA_API_KEY = process.env.OPENWA_API_KEY ?? "";
-
-const OPENWA_GROUP_CHAT_ID = process.env.OPENWA_GROUP_CHAT_ID ?? "";
-
-/*
- * Momento em que ESTE processo do webhook
- * foi iniciado.
- *
- * Mensagens que aconteceram antes desse momento
- * não serão processadas.
- */
-let webhookIniciadoEm = 0;
-
-/*
- * Deduplicação SOMENTE dos eventos message.sent do OpenWA
- * (mensagens ENVIADAS pelo número da loja), enquanto o backend
- * está ligado. Um message.sent repetido, depois que o marcador de
- * eco já foi consumido, seria confundido com mensagem manual do
- * vendedor.
- *
- * Mensagens RECEBIDAS (Meta messages[] e OpenWA message.received)
- * são deduplicadas no PostgreSQL (eventos_processados), nas rotas.
- */
-const eventosEnviadosProcessados = new Set<string>();
-
-/*
  * Garante que mensagens recebidas do mesmo
  * cliente sejam processadas em ordem.
  */
 const conversationQueues = new Map<string, Promise<void>>();
-
-/*
- * Guarda os IDs das mensagens enviadas
- * automaticamente pelo nosso sistema.
- *
- * Quando chegar message.sent dessas mensagens,
- * não devemos interpretar como vendedor assumindo.
- */
-const mensagensAutomaticasIds = new Set<string>();
-
-/*
- * Fallback para quando o OpenWA não entregar
- * um ID de mensagem utilizável na resposta da API.
- */
-type MarcadorEnvioAutomatico = {
-  chatId: string;
-  texto: string;
-  criadoEm: number;
-};
-
-const mensagensAutomaticasPendentes: MarcadorEnvioAutomatico[] = [];
 
 /*
  * Cada atendimento ativo possui seu próprio estado.
@@ -155,18 +100,8 @@ type Conversa = {
   atendimentoId: string;
 
   /*
-   * Resumo já enviado ao grupo?
-   */
-  resumoEnviado: boolean;
-
-  /*
-   * Resumo precisa de nova tentativa?
-   */
-  resumoPendente: boolean;
-
-  /*
-   * Algum vendedor já enviou mensagem manual
-   * para esse cliente?
+   * Um vendedor assumiu pelo Telegram?
+   * (A IA não responde mais essa conversa.)
    */
   vendedorAssumiu: boolean;
 
@@ -184,12 +119,6 @@ type Conversa = {
 const conversas = new Map<string, Conversa>();
 
 /*
- * Resumos que falharam no envio e
- * precisam ser reenviados.
- */
-const resumosPendentes = new Map<string, Conversa>();
-
-/*
  * Aviso de loja fechada já enviado por chatId.
  *
  * O valor é a chave do período fechado
@@ -198,54 +127,42 @@ const resumosPendentes = new Map<string, Conversa>();
  */
 const avisosLojaFechada = new Map<string, string>();
 
-export type OpenWAEvent = {
+/*
+ * Mensagem recebida, no formato interno do núcleo de
+ * atendimento. A Meta é convertida para ele em
+ * normalizarMensagensMeta (metaWebhook.ts).
+ */
+export type EventoMensagem = {
   event?: string;
 
-  timestamp?: string;
-
-  sessionId?: string;
-
+  /*
+   * ID externo da mensagem (wamid da Meta).
+   */
   idempotencyKey?: string;
-
-  deliveryId?: string;
 
   data?: {
     id?: string;
 
+    /*
+     * meta:<phone_number_id>:<wa_id>
+     */
     chatId?: string;
 
     from?: string;
-
-    to?: string;
 
     body?: string;
 
     type?: string;
 
     /*
-     * Timestamp real da mensagem.
-     *
-     * Normalmente vem como Unix time em segundos.
+     * Timestamp real da mensagem (Unix time em segundos).
      */
     timestamp?: number | string;
 
-    isGroup?: boolean;
-
-    fromMe?: boolean;
-
-    author?: string;
-
-    senderId?: string;
-
+    /*
+     * wa_id do cliente.
+     */
     senderPhone?: string;
-
-    sender?: {
-      id?: string;
-      name?: string;
-      pushname?: string;
-    };
-
-    [key: string]: unknown;
   };
 };
 
@@ -254,36 +171,6 @@ export type OpenWAEvent = {
  */
 function gerarAtendimentoId(): string {
   return "ATD-" + randomBytes(3).toString("hex").toUpperCase();
-}
-
-/**
- * Verifica a assinatura HMAC enviada pelo OpenWA.
- */
-function verificarAssinatura(
-  rawBody: Buffer,
-  signatureHeader: string | undefined,
-): boolean {
-  if (!OPENWA_WEBHOOK_SECRET) {
-    return false;
-  }
-
-  if (!signatureHeader) {
-    return false;
-  }
-
-  const expected =
-    "sha256=" +
-    createHmac("sha256", OPENWA_WEBHOOK_SECRET).update(rawBody).digest("hex");
-
-  const expectedBuffer = Buffer.from(expected, "utf8");
-
-  const receivedBuffer = Buffer.from(signatureHeader, "utf8");
-
-  if (expectedBuffer.length !== receivedBuffer.length) {
-    return false;
-  }
-
-  return timingSafeEqual(expectedBuffer, receivedBuffer);
 }
 
 /**
@@ -352,7 +239,6 @@ function normalizarTelefone(telefone?: string): string {
 /**
  * Mascara telefones dentro de um chatId para logs.
  *
- * 559198274361@c.us -> 5591****4361@c.us
  * meta:<id>:559198274361 -> meta:<id>:5591****4361
  */
 function mascararChatId(chatId: string): string {
@@ -406,34 +292,6 @@ function camposPreenchidos(resumo: Cliente["resumo"]): string {
 }
 
 /**
- * Obtém o telefone real do evento.
- *
- * Primeiro tentamos senderPhone.
- * Depois usamos from @c.us.
- */
-function obterTelefone(data: OpenWAEvent["data"]): string {
-  if (!data) {
-    return "Não informado";
-  }
-
-  const senderPhone = normalizarTelefone(data.senderPhone);
-
-  if (senderPhone) {
-    return senderPhone;
-  }
-
-  if (typeof data.from === "string" && data.from.endsWith("@c.us")) {
-    const telefone = normalizarTelefone(data.from.replace("@c.us", ""));
-
-    if (telefone) {
-      return telefone;
-    }
-  }
-
-  return "Não informado";
-}
-
-/**
  * Converte um timestamp para milissegundos.
  */
 function timestampParaMs(valor: unknown): number | null {
@@ -475,63 +333,17 @@ function timestampParaMs(valor: unknown): number | null {
 
 /**
  * Obtém o momento REAL em que a mensagem
- * aconteceu.
- *
- * Primeiro usa data.timestamp.
- *
- * O timestamp do envelope fica como fallback.
+ * aconteceu (data.timestamp).
  */
-function obterMomentoMensagem(payload: OpenWAEvent): number | null {
-  const timestampMensagem = timestampParaMs(payload.data?.timestamp);
-
-  if (timestampMensagem !== null) {
-    return timestampMensagem;
-  }
-
-  const timestampEnvelope = timestampParaMs(payload.timestamp);
-
-  if (timestampEnvelope !== null) {
-    return timestampEnvelope;
-  }
-
-  return null;
-}
-
-/**
- * Verifica se o evento aconteceu antes
- * deste processo do webhook começar.
- *
- * Isso evita que mensagens antigas
- * que estavam pendentes no OpenWA
- * sejam tratadas como novas.
- */
-function eventoAntesDoInicio(): boolean {
-  return false;
-}
-
-/**
- * Verifica se o evento aconteceu antes
- * do início deste webhook.
- */
-function mensagemAnteriorAoWebhook(payload: OpenWAEvent): boolean {
-  const momento = obterMomentoMensagem(payload);
-
-  /*
-   * Sem timestamp confiável,
-   * não processamos por segurança.
-   */
-  if (momento === null) {
-    return true;
-  }
-
-  return momento < webhookIniciadoEm;
+function obterMomentoMensagem(payload: EventoMensagem): number | null {
+  return timestampParaMs(payload.data?.timestamp);
 }
 
 /**
  * Verifica se a mensagem possui
  * mais de 20 minutos.
  */
-function mensagemComMaisDe20Minutos(payload: OpenWAEvent): boolean {
+function mensagemComMaisDe20Minutos(payload: EventoMensagem): boolean {
   const momento = obterMomentoMensagem(payload);
 
   if (momento === null) {
@@ -546,7 +358,7 @@ function mensagemComMaisDe20Minutos(payload: OpenWAEvent): boolean {
 /**
  * Formata a idade de uma mensagem.
  */
-function formatarIdadeMensagem(payload: OpenWAEvent): string {
+function formatarIdadeMensagem(payload: EventoMensagem): string {
   const momento = obterMomentoMensagem(payload);
 
   if (momento === null) {
@@ -570,363 +382,41 @@ function conversaEstaInativa(conversa: Conversa, agora = Date.now()): boolean {
 }
 
 /**
- * Extrai ID de mensagem da resposta
- * da API de envio do OpenWA.
- */
-function extrairIdMensagemResposta(valor: unknown): string | null {
-  if (!valor || typeof valor !== "object") {
-    return null;
-  }
-
-  const objeto = valor as Record<string, unknown>;
-
-  if (typeof objeto.id === "string") {
-    return objeto.id;
-  }
-
-  if (typeof objeto.messageId === "string") {
-    return objeto.messageId;
-  }
-
-  if (objeto.data && typeof objeto.data === "object") {
-    const data = objeto.data as Record<string, unknown>;
-
-    if (typeof data.id === "string") {
-      return data.id;
-    }
-
-    if (typeof data.messageId === "string") {
-      return data.messageId;
-    }
-  }
-
-  return null;
-}
-
-/**
- * Registra uma mensagem automática
- * que será enviada.
- */
-function registrarEnvioAutomatico(
-  chatId: string,
-  texto: string,
-): MarcadorEnvioAutomatico {
-  const marcador = {
-    chatId,
-    texto,
-    criadoEm: Date.now(),
-  };
-
-  mensagensAutomaticasPendentes.push(marcador);
-
-  return marcador;
-}
-
-/**
- * Limpa marcadores antigos.
- */
-function limparMarcadoresAutomaticos(): void {
-  const agora = Date.now();
-
-  for (let i = mensagensAutomaticasPendentes.length - 1; i >= 0; i--) {
-    const marcador = mensagensAutomaticasPendentes[i];
-
-    if (!marcador) {
-      mensagensAutomaticasPendentes.splice(i, 1);
-
-      continue;
-    }
-
-    if (agora - marcador.criadoEm > 60_000) {
-      mensagensAutomaticasPendentes.splice(i, 1);
-    }
-  }
-
-  /*
-   * Evita crescimento infinito.
-   */
-  if (mensagensAutomaticasIds.size > 500) {
-    const primeiro = mensagensAutomaticasIds.values().next().value;
-
-    if (typeof primeiro === "string") {
-      mensagensAutomaticasIds.delete(primeiro);
-    }
-  }
-}
-
-/**
- * Identifica se message.sent corresponde
- * a uma mensagem que o próprio sistema enviou.
- */
-function ehMensagemAutomatica(data: OpenWAEvent["data"]): boolean {
-  if (!data) {
-    return false;
-  }
-
-  limparMarcadoresAutomaticos();
-
-  /*
-   * Primeiro tentamos pelo ID.
-   */
-  if (typeof data.id === "string" && mensagensAutomaticasIds.has(data.id)) {
-    mensagensAutomaticasIds.delete(data.id);
-
-    return true;
-  }
-
-  const chatId = typeof data.chatId === "string" ? data.chatId : "";
-
-  const texto = typeof data.body === "string" ? data.body.trim() : "";
-
-  if (!chatId || !texto) {
-    return false;
-  }
-
-  const agora = Date.now();
-
-  const indice = mensagensAutomaticasPendentes.findIndex(
-    (marcador) =>
-      marcador.chatId === chatId &&
-      marcador.texto === texto &&
-      agora - marcador.criadoEm < 60_000,
-  );
-
-  if (indice === -1) {
-    return false;
-  }
-
-  mensagensAutomaticasPendentes.splice(indice, 1);
-
-  return true;
-}
-
-/**
- * Envia uma mensagem através da API do OpenWA.
- */
-async function enviarMensagemOpenWA(
-  chatId: string,
-  texto: string,
-): Promise<void> {
-  if (!OPENWA_SESSION_ID) {
-    throw new Error("OPENWA_SESSION_ID não configurado.");
-  }
-
-  if (!OPENWA_API_KEY) {
-    throw new Error("OPENWA_API_KEY não configurado.");
-  }
-
-  const url =
-    `${OPENWA_API_URL}/api/sessions/` +
-    `${OPENWA_SESSION_ID}` +
-    `/messages/send-text`;
-
-  /*
-   * Registramos antes do envio
-   * para evitar corrida com message.sent.
-   */
-  const marcador = registrarEnvioAutomatico(chatId, texto);
-
-  try {
-    const resposta = await fetch(url, {
-      method: "POST",
-
-      headers: {
-        "Content-Type": "application/json",
-
-        "X-API-Key": OPENWA_API_KEY,
-      },
-
-      body: JSON.stringify({
-        chatId,
-        text: texto,
-      }),
-    });
-
-    if (!resposta.ok) {
-      const indice = mensagensAutomaticasPendentes.indexOf(marcador);
-
-      if (indice !== -1) {
-        mensagensAutomaticasPendentes.splice(indice, 1);
-      }
-
-      /*
-       * O corpo é lido para liberar a conexão,
-       * mas não entra na mensagem de erro:
-       * pode conter telefone ou texto.
-       */
-      await resposta.text();
-
-      throw new Error(`OpenWA respondeu ${resposta.status}`);
-    }
-
-    /*
-     * O endpoint normalmente retorna JSON.
-     *
-     * Se vier um messageId,
-     * guardamos para identificar
-     * o message.sent correspondente.
-     */
-    try {
-      const corpo = (await resposta.json()) as unknown;
-
-      const messageId = extrairIdMensagemResposta(corpo);
-
-      if (messageId) {
-        mensagensAutomaticasIds.add(messageId);
-      }
-    } catch {
-      /*
-       * O fallback por chat + texto continua válido.
-       */
-    }
-
-    console.log(`Mensagem enviada para ${mascararChatId(chatId)}`);
-  } catch (erro) {
-    const indice = mensagensAutomaticasPendentes.indexOf(marcador);
-
-    if (indice !== -1) {
-      mensagensAutomaticasPendentes.splice(indice, 1);
-    }
-
-    throw erro;
-  }
-}
-
-/**
- * Faz até 3 tentativas de envio.
- */
-async function enviarComRetentativas(
-  chatId: string,
-  texto: string,
-  tentativas = 3,
-): Promise<boolean> {
-  /*
-   * Conversas da Meta nunca são enviadas pelo OpenWA.
-   *
-   * META_ENVIO_ATIVO decide AQUI entre
-   * somente log e envio real pela Cloud API.
-   *
-   * true no retorno = aceito pela Graph API,
-   * NÃO é confirmação de entrega.
-   */
-  if (ehChatMeta(chatId)) {
-    if (!metaEnvioAtivo()) {
-      console.log(
-        `[Meta] resposta não enviada (META_ENVIO_ATIVO=false) | destino: ${descreverDestinoMeta(chatId)} | tamanho: ${texto.length}`,
-      );
-
-      return false;
-    }
-
-    const resultado = await enviarTextoMeta(chatId, texto);
-
-    return resultado.aceito;
-  }
-
-  for (let i = 1; i <= tentativas; i++) {
-    try {
-      await enviarMensagemOpenWA(chatId, texto);
-
-      return true;
-    } catch (erro: unknown) {
-      console.error(
-        `Falha no envio (tentativa ${i}/${tentativas}):`,
-        erro instanceof Error ? erro.message : "erro desconhecido",
-      );
-
-      if (i < tentativas) {
-        await new Promise((resolve) =>
-          setTimeout(resolve, 1000 * 2 ** (i - 1)),
-        );
-      }
-    }
-  }
-
-  return false;
-}
-
-/**
- * Formata o resumo para o grupo.
+ * Envia uma mensagem ao cliente pela WhatsApp Cloud API (Meta),
+ * o ÚNICO canal do MVP. Não há fallback para outro provedor.
  *
- * O ID interno NÃO é mostrado.
+ * META_ENVIO_ATIVO decide entre somente log e envio real.
+ *
+ * true no retorno = aceito pela Graph API,
+ * NÃO é confirmação de entrega.
  */
-function formatarResumo(conversa: Conversa): string {
-  const resumo = conversa.cliente.resumo;
-
-  return [
-    "📋 NOVO ATENDIMENTO",
-
-    "",
-
-    `Nome: ${resumo.nome}`,
-
-    `Telefone: ${resumo.telefone}`,
-
-    `Produto: ${resumo.produto}`,
-
-    `Quantidade: ${resumo.quantidade}`,
-
-    `Observações: ${resumo.observacoes}`,
-  ].join("\n");
-}
-
-/**
- * Envia o resumo ao grupo.
- */
-async function enviarResumoComRetentativas(conversa: Conversa): Promise<void> {
-  if (conversa.resumoEnviado) {
-    return;
-  }
-
-  if (!OPENWA_GROUP_CHAT_ID) {
-    conversa.resumoPendente = true;
-
-    resumosPendentes.set(conversa.atendimentoId, conversa);
-
-    console.error("OPENWA_GROUP_CHAT_ID não configurado.");
-
-    return;
-  }
-
-  const ok = await enviarComRetentativas(
-    OPENWA_GROUP_CHAT_ID,
-    formatarResumo(conversa),
-  );
-
-  if (ok) {
-    conversa.resumoEnviado = true;
-
-    conversa.resumoPendente = false;
-
-    resumosPendentes.delete(conversa.atendimentoId);
-
-    console.log("Resumo enviado para o grupo dos vendedores.");
-  } else {
-    conversa.resumoPendente = true;
-
-    resumosPendentes.set(conversa.atendimentoId, conversa);
-
+async function enviarAoCliente(chatId: string, texto: string): Promise<boolean> {
+  if (!ehChatMeta(chatId)) {
     console.error(
-      "ERRO: resumo não enviado. Ficará pendente para nova tentativa.",
+      `Envio recusado: ${mascararChatId(chatId)} não é uma conversa da Meta.`,
     );
+
+    return false;
   }
+
+  if (!metaEnvioAtivo()) {
+    console.log(
+      `[Meta] resposta não enviada (META_ENVIO_ATIVO=false) | destino: ${descreverDestinoMeta(chatId)} | tamanho: ${texto.length}`,
+    );
+
+    return false;
+  }
+
+  const resultado = await enviarTextoMeta(chatId, texto);
+
+  return resultado.aceito;
 }
 
 /**
- * Cria um cliente novo.
+ * Cria um cliente novo a partir do wa_id da Meta.
  */
-function criarCliente(from?: string, senderPhone?: string): Cliente {
-  let telefone = normalizarTelefone(senderPhone);
-
-  if (!telefone) {
-    if (from && from.endsWith("@c.us")) {
-      telefone = normalizarTelefone(from.replace("@c.us", ""));
-    }
-  }
-
-  if (!telefone) {
-    telefone = "Não informado";
-  }
+function criarCliente(senderPhone?: string): Cliente {
+  const telefone = normalizarTelefone(senderPhone) || "Não informado";
 
   return {
     telefone,
@@ -948,28 +438,9 @@ function criarCliente(from?: string, senderPhone?: string): Cliente {
 }
 
 /**
- * Atualiza o telefone quando o OpenWA
- * consegue resolver o @lid.
- */
-function atualizarTelefone(
-  conversa: Conversa,
-  data: OpenWAEvent["data"],
-): void {
-  const telefone = obterTelefone(data);
-
-  if (telefone === "Não informado") {
-    return;
-  }
-
-  conversa.cliente.telefone = telefone;
-
-  conversa.cliente.resumo.telefone = telefone;
-}
-
-/**
  * Cria uma nova conversa.
  */
-function criarNovaConversa(from?: string, senderPhone?: string): Conversa {
+function criarNovaConversa(senderPhone?: string): Conversa {
   const usarClaude =
     (process.env.USAR_IA ?? "").trim().toLowerCase() === "claude";
 
@@ -980,15 +451,11 @@ function criarNovaConversa(from?: string, senderPhone?: string): Conversa {
   const agora = Date.now();
 
   const conversa: Conversa = {
-    cliente: criarCliente(from, senderPhone),
+    cliente: criarCliente(senderPhone),
 
     ia,
 
     atendimentoId,
-
-    resumoEnviado: false,
-
-    resumoPendente: false,
 
     vendedorAssumiu: false,
 
@@ -1006,16 +473,9 @@ function criarNovaConversa(from?: string, senderPhone?: string): Conversa {
 
 /**
  * Finaliza uma conversa por inatividade.
- *
- * O resumo pendente, se existir, continua
- * separado para retry.
  */
 function finalizarConversa(chatId: string, conversa: Conversa): void {
   conversas.delete(chatId);
-
-  if (conversa.resumoPendente) {
-    resumosPendentes.set(conversa.atendimentoId, conversa);
-  }
 
   console.log(
     `Atendimento ${conversa.atendimentoId} encerrado por inatividade.`,
@@ -1028,31 +488,18 @@ function finalizarConversa(chatId: string, conversa: Conversa): void {
  * Se a anterior passou de 20 minutos,
  * ela é encerrada e uma nova é criada.
  */
-function obterConversa(
-  chatId: string,
-  from?: string,
-  senderPhone?: string,
-): Conversa {
+function obterConversa(chatId: string, senderPhone?: string): Conversa {
   const existente = conversas.get(chatId);
 
   if (existente) {
     /*
      * Atualiza o telefone caso ele esteja disponível.
      */
-    if (senderPhone) {
-      const telefone = normalizarTelefone(senderPhone);
+    const telefone = normalizarTelefone(senderPhone);
 
-      if (telefone) {
-        existente.cliente.telefone = telefone;
-        existente.cliente.resumo.telefone = telefone;
-      }
-    } else if (from && from.endsWith("@c.us")) {
-      const telefone = normalizarTelefone(from.replace("@c.us", ""));
-
-      if (telefone) {
-        existente.cliente.telefone = telefone;
-        existente.cliente.resumo.telefone = telefone;
-      }
+    if (telefone) {
+      existente.cliente.telefone = telefone;
+      existente.cliente.resumo.telefone = telefone;
     }
 
     /*
@@ -1074,122 +521,11 @@ function obterConversa(
    * Não existe atendimento ativo.
    * Portanto criamos um novo.
    */
-  const nova = criarNovaConversa(from, senderPhone);
+  const nova = criarNovaConversa(senderPhone);
 
   conversas.set(chatId, nova);
 
   return nova;
-}
-
-/**
- * Processa uma mensagem enviada manualmente
- * pelo vendedor.
- *
- * O vendedor não precisa se identificar.
- *
- * O próprio envio pelo número da loja
- * assume o atendimento.
- */
-async function processarMensagemManual(payload: OpenWAEvent): Promise<void> {
-  const data = payload.data;
-
-  if (!data) {
-    return;
-  }
-
-  /*
-   * Só interessa mensagem enviada pelo
-   * próprio número conectado ao OpenWA.
-   */
-  if (data.fromMe !== true) {
-    return;
-  }
-
-  const chatId = typeof data.chatId === "string" ? data.chatId : "";
-
-  if (!chatId) {
-    return;
-  }
-
-  /*
-   * Nunca usamos mensagens de grupo
-   * para assumir atendimento.
-   */
-  if (data.isGroup === true || chatId.endsWith("@g.us")) {
-    return;
-  }
-
-  /*
-   * Se foi o nosso próprio bot que enviou,
-   * não é vendedor.
-   */
-  if (ehMensagemAutomatica(data)) {
-    console.log(
-      `Mensagem automática ignorada no message.sent: ${mascararChatId(chatId)}`,
-    );
-
-    const conversa = conversas.get(chatId);
-
-    if (conversa) {
-      conversa.ultimaMensagemEm = Date.now();
-    }
-
-    return;
-  }
-
-  /*
-   * Só existe assunção se houver
-   * um atendimento ativo.
-   */
-  const conversa = conversas.get(chatId);
-
-  if (!conversa) {
-    console.log(
-      `Mensagem manual ignorada: não existe atendimento ativo para ${mascararChatId(chatId)}`,
-    );
-
-    return;
-  }
-
-  /*
-   * Se já ficou inativo por 20 minutos,
-   * não reabrimos o atendimento antigo.
-   */
-  if (conversaEstaInativa(conversa)) {
-    finalizarConversa(chatId, conversa);
-
-    console.log(
-      `Mensagem manual ignorada porque o atendimento já estava encerrado: ${mascararChatId(chatId)}`,
-    );
-
-    return;
-  }
-
-  /*
-   * Marca a atividade usando o horário
-   * da mensagem enviada.
-   */
-  const momento = obterMomentoMensagem(payload);
-
-  conversa.ultimaMensagemEm = momento ?? Date.now();
-
-  /*
-   * Primeiro vendedor a enviar
-   * uma mensagem assume o atendimento.
-   */
-  if (!conversa.vendedorAssumiu) {
-    conversa.vendedorAssumiu = true;
-
-    conversa.cliente.status = "HUMANO";
-
-    console.log(
-      `Atendimento ${conversa.atendimentoId} assumido por mensagem manual da loja.`,
-    );
-  } else {
-    console.log(
-      `Mensagem manual recebida para atendimento já assumido: ${mascararChatId(chatId)}`,
-    );
-  }
 }
 
 /**
@@ -1214,9 +550,9 @@ async function avisarLojaFechada(chatId: string): Promise<void> {
    * Modo log-only da Meta conta como avisado,
    * igual ao restante do fluxo.
    */
-  const modoSomenteLog = ehChatMeta(chatId) && !metaEnvioAtivo();
+  const modoSomenteLog = !metaEnvioAtivo();
 
-  const enviado = await enviarComRetentativas(chatId, MENSAGEM_LOJA_FECHADA);
+  const enviado = await enviarAoCliente(chatId, MENSAGEM_LOJA_FECHADA);
 
   if (enviado || modoSomenteLog) {
     avisosLojaFechada.set(chatId, periodo);
@@ -1232,7 +568,7 @@ async function avisarLojaFechada(chatId: string): Promise<void> {
 /**
  * Processa mensagem recebida do cliente.
  */
-async function processarMensagemRecebida(payload: OpenWAEvent): Promise<void> {
+async function processarMensagemRecebida(payload: EventoMensagem): Promise<void> {
   const data = payload.data;
 
   if (!data) {
@@ -1244,15 +580,6 @@ async function processarMensagemRecebida(payload: OpenWAEvent): Promise<void> {
   const texto = typeof data.body === "string" ? data.body.trim() : "";
 
   if (!chatId || !texto) {
-    return;
-  }
-
-  /*
-   * Não processamos grupos.
-   */
-  if (data.isGroup === true || chatId.endsWith("@g.us")) {
-    console.log(`Mensagem de grupo ignorada: ${mascararChatId(chatId)}`);
-
     return;
   }
 
@@ -1282,12 +609,7 @@ async function processarMensagemRecebida(payload: OpenWAEvent): Promise<void> {
       return;
     }
 
-    const conversa = obterConversa(chatId, data.from, data.senderPhone);
-
-    /*
-     * Atualiza o telefone real.
-     */
-    atualizarTelefone(conversa, data);
+    const conversa = obterConversa(chatId, data.senderPhone);
 
     /*
      * Usa o horário da mensagem,
@@ -1302,7 +624,7 @@ async function processarMensagemRecebida(payload: OpenWAEvent): Promise<void> {
      */
     console.log(
       [
-        `Mensagem recebida (${ehChatMeta(chatId) ? "Meta" : "OpenWA"})`,
+        "Mensagem recebida (Meta)",
         `atendimento: ${conversa.atendimentoId}`,
         `chatId: ${mascararChatId(chatId)}`,
         `tamanho: ${texto.length}`,
@@ -1355,8 +677,8 @@ async function processarMensagemRecebida(payload: OpenWAEvent): Promise<void> {
     /*
      * IMPORTANTE:
      *
-     * Um vendedor pode ter enviado uma mensagem
-     * manual enquanto a Claude estava processando.
+     * Um vendedor pode ter assumido pelo Telegram
+     * enquanto a Claude estava processando.
      *
      * Nesse caso, HUMANO tem prioridade.
      */
@@ -1375,8 +697,6 @@ async function processarMensagemRecebida(payload: OpenWAEvent): Promise<void> {
        */
       conversa.cliente.resumo = resultado.resumo;
 
-      atualizarTelefone(conversa, data);
-
       return;
     }
 
@@ -1386,11 +706,6 @@ async function processarMensagemRecebida(payload: OpenWAEvent): Promise<void> {
     conversa.cliente.status = resultado.status;
 
     conversa.cliente.resumo = resultado.resumo;
-
-    /*
-     * Garante novamente o telefone.
-     */
-    atualizarTelefone(conversa, data);
 
     /*
      * Triagem iniciada antes do fechamento e
@@ -1416,7 +731,7 @@ async function processarMensagemRecebida(payload: OpenWAEvent): Promise<void> {
      *
      * A flag é lida uma única vez aqui para decidir.
      */
-    const modoSomenteLog = ehChatMeta(chatId) && !metaEnvioAtivo();
+    const modoSomenteLog = !metaEnvioAtivo();
 
     let clienteAvisado = false;
 
@@ -1428,7 +743,7 @@ async function processarMensagemRecebida(payload: OpenWAEvent): Promise<void> {
       /*
        * Envia a resposta ao cliente (tentativa real).
        */
-      clienteAvisado = await enviarComRetentativas(chatId, resultado.resposta);
+      clienteAvisado = await enviarAoCliente(chatId, resultado.resposta);
     }
 
     if (clienteAvisado) {
@@ -1460,28 +775,11 @@ async function processarMensagemRecebida(payload: OpenWAEvent): Promise<void> {
     }
 
     /*
-     * Quando a IA conclui o atendimento,
-     * o resumo vai para o grupo.
+     * Quando a IA conclui o atendimento, o resumo vai
+     * SOMENTE para o grupo de vendedores no Telegram
+     * (idempotente por atendimento).
      */
     if (resultado.status === "HUMANO") {
-      /*
-       * Resumo da Meta fica só no log.
-       *
-       * Nunca vai para o grupo do OpenWA
-       * e nunca fica pendente para retry.
-       */
-      if (ehChatMeta(chatId)) {
-        console.log(
-          `[Meta] resumo do atendimento ${conversa.atendimentoId} mantido só no log; não vai para o grupo do OpenWA.`,
-        );
-      } else {
-        await enviarResumoComRetentativas(conversa);
-      }
-
-      /*
-       * Resumo para o grupo de vendedores no Telegram
-       * (idempotente por atendimento).
-       */
       if (telegramConfigurado()) {
         await enviarResumoTelegram(
           conversa.atendimentoId,
@@ -1548,25 +846,6 @@ function verificarInatividade(): void {
 }
 
 /**
- * Reenvia resumos pendentes.
- */
-function reenviarResumosPendentes(): void {
-  for (const conversa of resumosPendentes.values()) {
-    if (!conversa.resumoPendente) {
-      resumosPendentes.delete(conversa.atendimentoId);
-
-      continue;
-    }
-
-    console.log(
-      `Reenviando resumo pendente do atendimento ${conversa.atendimentoId}`,
-    );
-
-    void enviarResumoComRetentativas(conversa);
-  }
-}
-
-/**
  * Associa um status da Meta ao atendimento
  * que originou a mensagem.
  *
@@ -1616,10 +895,10 @@ function tratarStatusMeta(status: MetaStatus): void {
 }
 
 /**
- * ID externo do evento: idempotencyKey (corpo ou header do
- * OpenWA; wamid na Meta) e, na falta dele, data.id.
+ * ID externo do evento: idempotencyKey (wamid da Meta) e,
+ * na falta dele, data.id.
  */
-function chaveEventoExterno(payload: OpenWAEvent): string {
+function chaveEventoExterno(payload: EventoMensagem): string {
   return payload.idempotencyKey ?? payload.data?.id ?? "";
 }
 
@@ -1667,80 +946,25 @@ async function registrarMensagemRecebida(
 }
 
 /**
- * Processa um evento do OpenWA.
+ * Processa uma mensagem recebida da Meta.
+ *
+ * A deduplicação já aconteceu na rota (eventos_processados).
+ *
+ * Não há await antes de processarMensagemRecebida chegar em
+ * adicionarNaFila: isso mantém a ordem de um lote messages[].
  */
-async function processarEvento(payload: OpenWAEvent): Promise<void> {
-  /*
-   * Aceitamos somente eventos
-   * de mensagem recebida ou enviada.
-   */
-  if (
-    payload.event !== "message.received" &&
-    payload.event !== "message.sent"
-  ) {
+async function processarEvento(payload: EventoMensagem): Promise<void> {
+  if (payload.event !== "message.received") {
     return;
   }
 
-  const data = payload.data;
-
-  if (!data) {
+  if (!payload.data) {
     return;
   }
 
   /*
-   * Mensagens RECEBIDAS já foram deduplicadas no PostgreSQL
-   * (eventos_processados) pela rota, antes de chegar aqui.
-   *
-   * message.sent (enviadas pelo número da loja) continua com
-   * deduplicação em memória, marcada logo na chegada.
-   */
-  if (payload.event === "message.sent") {
-    const chave = chaveEventoExterno(payload);
-
-    if (chave && eventosEnviadosProcessados.has(chave)) {
-      console.log(`Evento message.sent duplicado ignorado: ${mascararChatId(chave)}`);
-
-      return;
-    }
-
-    if (chave) {
-      eventosEnviadosProcessados.add(chave);
-    }
-  }
-
-  /*
-   * REGRA 1:
-   *
-   * Se a mensagem aconteceu ANTES
-   * deste webhook ser iniciado,
-   * ela nunca entra no sistema.
-   *
-   * Só vale para o OpenWA: a Meta não
-   * acumula eventos pendentes da sessão.
-   */
-  const eventoMeta = ehChatMeta(data.chatId ?? "");
-
-  if (!eventoMeta && mensagemAnteriorAoWebhook(payload)) {
-    console.log(
-      [
-        "Evento anterior ao início do webhook ignorado.",
-        `Evento: ${payload.event}`,
-        `Horário do webhook: ${new Date(webhookIniciadoEm).toLocaleString(
-          "pt-BR",
-        )}`,
-      ].join(" | "),
-    );
-
-    return;
-  }
-
-  /*
-   * REGRA 2:
-   *
-   * Mesmo sendo posterior ao início
-   * do webhook, uma mensagem com mais
-   * de 20 minutos não pode iniciar
-   * um novo atendimento.
+   * Mensagem com mais de 20 minutos não pode
+   * iniciar um novo atendimento.
    */
   if (mensagemComMaisDe20Minutos(payload)) {
     console.log(
@@ -1754,23 +978,6 @@ async function processarEvento(payload: OpenWAEvent): Promise<void> {
     return;
   }
 
-  /*
-   * EVENTO ENVIADO:
-   *
-   * verifica se foi uma mensagem manual
-   * do vendedor.
-   */
-  if (payload.event === "message.sent") {
-    await processarMensagemManual(payload);
-
-    return;
-  }
-
-  /*
-   * EVENTO RECEBIDO:
-   *
-   * trata mensagem do cliente.
-   */
   await processarMensagemRecebida(payload);
 }
 
@@ -1778,12 +985,6 @@ async function processarEvento(payload: OpenWAEvent): Promise<void> {
  * Inicia o servidor do webhook.
  */
 export function iniciarWebhook(): void {
-  /*
-   * Marca o momento EXATO em que
-   * esse processo começou.
-   */
-  webhookIniciadoEm = Date.now();
-
   /*
    * Vendedor venceu o lock no Telegram:
    * a IA para de responder essa conversa.
@@ -1807,13 +1008,6 @@ export function iniciarWebhook(): void {
       `Atendimento ${atendimentoId} assumido via Telegram; conversa já encerrada na memória.`,
     );
   });
-
-  console.log(
-    [
-      "Webhook aceitará somente mensagens recebidas a partir de:",
-      new Date(webhookIniciadoEm).toLocaleString("pt-BR"),
-    ].join(" "),
-  );
 
   const server = createServer(async (request, response) => {
     try {
@@ -1928,7 +1122,7 @@ export function iniciarWebhook(): void {
            * (messages[]) ANTES de responder. statuses[] NÃO passa
            * por aqui: trazem o mesmo wamid da mensagem original.
            */
-          const mensagensNovas: OpenWAEvent[] = [];
+          const mensagensNovas: EventoMensagem[] = [];
 
           let falhaRegistro = false;
 
@@ -1972,8 +1166,16 @@ export function iniciarWebhook(): void {
           }
 
           /*
-           * messages[] entram no mesmo núcleo
-           * de atendimento do OpenWA.
+           * messages[] entram no núcleo de atendimento.
+           *
+           * ORDEM DO LOTE: a ordem original do payload DEVE ser
+           * preservada. Não pode existir await entre esta iteração
+           * e adicionarNaFila (processarEvento →
+           * processarMensagemRecebida), nem Promise.all aqui: as
+           * mensagens entram na fila da conversa, de forma
+           * síncrona, na ordem do laço. Qualquer mudança neste
+           * fluxo precisa preservar essa regra
+           * (teste: passo3-ordem-lote.test.mts).
            */
           for (const evento of mensagensNovas) {
             processarEvento(evento).catch((erro: unknown) => {
@@ -1989,99 +1191,10 @@ export function iniciarWebhook(): void {
       }
 
       /*
-       * Endpoint do webhook.
+       * Qualquer outra rota.
        */
-      if (request.method !== "POST" || request.url !== "/openwa/webhook") {
-        responderJson(response, 404, {
-          error: "Not found",
-        });
-
-        return;
-      }
-
-      /*
-       * Lê o corpo bruto.
-       */
-      const rawBody = await lerCorpo(request);
-
-      /*
-       * Valida assinatura HMAC.
-       */
-      const signature = request.headers["x-openwa-signature"];
-
-      const assinaturaValida =
-        typeof signature === "string" &&
-        verificarAssinatura(rawBody, signature);
-
-      if (!assinaturaValida) {
-        responderJson(response, 401, {
-          received: false,
-        });
-
-        return;
-      }
-
-      let payload: OpenWAEvent;
-
-      try {
-        payload = JSON.parse(rawBody.toString("utf8")) as OpenWAEvent;
-      } catch {
-        responderJson(response, 400, {
-          received: false,
-        });
-
-        return;
-      }
-
-      /*
-       * Se o corpo não trouxer
-       * idempotencyKey, usa o header.
-       */
-      const idempotencyHeader = request.headers["x-openwa-idempotency-key"];
-
-      if (!payload.idempotencyKey && typeof idempotencyHeader === "string") {
-        payload.idempotencyKey = idempotencyHeader;
-      }
-
-      /*
-       * Deduplicação persistente das mensagens RECEBIDAS antes de
-       * responder. message.sent segue para o fluxo atual (eco e
-       * deduplicação em memória).
-       */
-      if (payload.event === "message.received") {
-        const registro = await registrarMensagemRecebida(
-          "OPENWA",
-          chaveEventoExterno(payload),
-        );
-
-        if (registro === "duplicado") {
-          responderJson(response, 200, { received: true });
-
-          return;
-        }
-
-        if (registro === "falha") {
-          responderJson(response, 503, { received: false });
-
-          return;
-        }
-      }
-
-      /*
-       * Responde rapidamente ao OpenWA.
-       */
-      responderJson(response, 200, {
-        received: true,
-      });
-
-      /*
-       * Processamento assíncrono.
-       */
-      processarEvento(payload).catch((erro: unknown) => {
-        console.error(
-          "Erro ao processar evento do OpenWA:",
-          erro instanceof Error ? erro.message : "erro desconhecido",
-        );
+      responderJson(response, 404, {
+        error: "Not found",
       });
     } catch (erro: unknown) {
       if (!response.headersSent) {
@@ -2098,29 +1211,17 @@ export function iniciarWebhook(): void {
   });
 
   server.listen(PORT, () => {
-    console.log(`Webhook OpenWA ouvindo na porta ${PORT}`);
+    console.log(`Backend ouvindo na porta ${PORT}`);
 
-    console.log("Endpoint: POST /openwa/webhook");
+    console.log("Endpoint: GET/POST /meta/webhook");
 
     console.log("Endpoint: POST /telegram/webhook");
-
-    console.log(
-      `Mensagens anteriores a ${new Date(webhookIniciadoEm).toLocaleTimeString(
-        "pt-BR",
-      )} serão ignoradas.`,
-    );
   });
 
   /*
    * Verifica inatividade a cada 30 segundos.
    */
   setInterval(verificarInatividade, VERIFICACAO_INATIVIDADE_MS);
-
-  /*
-   * Reenvia resumos pendentes
-   * a cada 60 segundos.
-   */
-  setInterval(reenviarResumosPendentes, 60_000);
 
   setInterval(() => {
     reenviarResumosTelegramPendentes().catch((erro: unknown) => {
@@ -2130,10 +1231,4 @@ export function iniciarWebhook(): void {
       );
     });
   }, 60_000);
-
-  /*
-   * Limpa marcadores de mensagens
-   * automáticas.
-   */
-  setInterval(limparMarcadoresAutomaticos, 30_000);
 }
