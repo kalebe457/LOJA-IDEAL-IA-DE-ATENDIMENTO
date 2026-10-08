@@ -65,6 +65,52 @@ async function emTransacao<T>(
   }
 }
 
+export type DadosVendedor = {
+  telegramUserId: string;
+
+  /*
+   * Nome atual do vendedor no Telegram.
+   */
+  nome: string;
+
+  /*
+   * Chat privado do vendedor com o bot (DM).
+   */
+  chatPrivadoId: number;
+};
+
+/**
+ * Upsert do vendedor pelo telegram_user_id (nome atual, chat
+ * privado, ativo = TRUE). Devolve o id.
+ */
+async function upsertVendedor(conexao: Conexao, dados: DadosVendedor): Promise<string | undefined> {
+  const vendedor = await conexao.query<{ id: string }>(
+    `INSERT INTO vendedores (telegram_user_id, nome, telegram_chat_id, ativo)
+     VALUES ($1, $2, $3, TRUE)
+     ON CONFLICT (telegram_user_id) DO UPDATE SET
+       nome = EXCLUDED.nome,
+       telegram_chat_id = EXCLUDED.telegram_chat_id,
+       ativo = TRUE,
+       atualizado_em = now()
+     RETURNING id`,
+    [dados.telegramUserId, dados.nome, dados.chatPrivadoId],
+  );
+
+  return vendedor.rows[0]?.id;
+}
+
+/**
+ * /start aceito: grava o vendedor (a recuperação na partida o
+ * devolve à memória sem novo /start). Falha só gera log.
+ */
+export async function registrarVendedor(dados: DadosVendedor): Promise<boolean> {
+  const resultado = await emTransacao("registrar o vendedor do /start", (conexao) =>
+    upsertVendedor(conexao, dados),
+  );
+
+  return resultado.ok;
+}
+
 /**
  * Resumo publicado (ou republicado) no grupo: grava a mensagem
  * que está valendo.
@@ -95,20 +141,8 @@ export async function registrarResumoPublicado(
   return resultado.ok && resultado.valor.rowCount === 1;
 }
 
-export type DadosAssuncao = {
+export type DadosAssuncao = DadosVendedor & {
   codigo: string;
-
-  telegramUserId: string;
-
-  /*
-   * Nome atual do vendedor no Telegram.
-   */
-  nome: string;
-
-  /*
-   * Chat privado do vendedor com o bot (DM).
-   */
-  chatPrivadoId: number;
 
   /*
    * Mensagem do resumo onde houve o clique (vindos do callback).
@@ -146,19 +180,7 @@ export async function registrarAssuncao(
   const resultado = await emTransacao(
     `registrar a assunção de ${dados.codigo}`,
     async (conexao): Promise<ResultadoAssuncaoBanco> => {
-      const vendedor = await conexao.query<{ id: string }>(
-        `INSERT INTO vendedores (telegram_user_id, nome, telegram_chat_id, ativo)
-         VALUES ($1, $2, $3, TRUE)
-         ON CONFLICT (telegram_user_id) DO UPDATE SET
-           nome = EXCLUDED.nome,
-           telegram_chat_id = EXCLUDED.telegram_chat_id,
-           ativo = TRUE,
-           atualizado_em = now()
-         RETURNING id`,
-        [dados.telegramUserId, dados.nome, dados.chatPrivadoId],
-      );
-
-      const vendedorId = vendedor.rows[0]?.id;
+      const vendedorId = await upsertVendedor(conexao, dados);
 
       const atualizado = await conexao.query(
         `UPDATE atendimentos SET

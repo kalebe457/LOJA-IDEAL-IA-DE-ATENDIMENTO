@@ -34,6 +34,7 @@ type Chamada = { metodo: string; corpo: any; ok?: boolean };
 const telegram: Chamada[] = [];
 let falharResumo = false;
 const falharDM = new Set<number>();
+const statusPorUsuario = new Map<number, string>(); // padrão: member
 let msgId = 8000;
 const externas: string[] = [];
 const fetchReal = globalThis.fetch;
@@ -49,7 +50,7 @@ const fetchReal = globalThis.fetch;
     const corpo = JSON.parse(init.body);
     telegram.push({ metodo: m[1]!, corpo });
     const r = (o: any) => ({ status: o.ok ? 200 : 400, json: async () => o });
-    if (m[1] === "getChatMember") return r({ ok: true, result: { status: "member" } });
+    if (m[1] === "getChatMember") return r({ ok: true, result: { status: statusPorUsuario.get(corpo.user_id) ?? "member" } });
     if (m[1] === "sendMessage") {
       if ((String(corpo.chat_id) === String(GRUPO) && falharResumo) || falharDM.has(corpo.chat_id)) {
         telegram.at(-1)!.ok = false;
@@ -306,6 +307,40 @@ await trava.query("ROLLBACK");
 trava.release();
 ok(!r12.ok && dt >= 4_500 && dt < 30_000 && logs.some((l) => l.includes("ATENÇÃO: banco indisponível na partida (57014)")),
   `recuperação cancelada pelo statement_timeout em ${(dt / 1000).toFixed(1)} s (< 30 s); sobe com memória vazia`);
+
+out("\n== 5d.1: /start grava em vendedores ==");
+const V3 = 990_000_000_103, V4 = 990_000_000_104, V5 = 990_000_000_105;
+const linhaVendedor = async (id: number) =>
+  (await banco.consultar("SELECT nome, telegram_chat_id, ativo FROM vendedores WHERE telegram_user_id = $1", [id])).rows[0];
+await start(V3, "Teste Vendedor Tres");
+const lv3 = await linhaVendedor(V3);
+ok(lv3?.nome === "Teste Vendedor Tres" && lv3?.telegram_chat_id === String(V3) && lv3?.ativo === true, "/start aceito grava o vendedor (nome, chat privado, ativo)");
+const K = await novoAtendimentoCompleto(TEL(14));
+await reiniciar();
+const rK = await clique(V3, "Teste Vendedor Tres", K.codigo, K.msg);
+ok(rK?.startsWith("Atendimento assumido!") === true && (await atendimento(K.codigo))?.v_user === String(V3),
+  "vendedor que só fez /start volta na partida e assume sem novo /start");
+
+(pool as any).connect = (...a: unknown[]) => (a.length === 0 ? Promise.reject(Object.assign(new Error("conexão recusada (simulada)"), { code: "ECONNREFUSED" })) : (connectOriginal as any)(...a));
+await start(V4, "Teste Vendedor Quatro");
+(pool as any).connect = connectOriginal;
+const logFalha = logs.find((l) => l.includes("falha ao registrar o vendedor do /start"));
+ok((await linhaVendedor(V4)) === undefined && logFalha === "[Persistência] falha ao registrar o vendedor do /start (ECONNREFUSED).",
+  "/start com banco fora: nada gravado; log só com o código");
+const L = await novoAtendimentoCompleto(TEL(15));
+ok((await clique(V4, "Teste Vendedor Quatro", L.codigo, L.msg))?.startsWith("Atendimento assumido!") === true, "o /start continuou valendo pela memória (assume)");
+
+statusPorUsuario.set(V5, "left");
+await start(V5, "Teste Fora");
+const ultimaV5 = telegram.filter((c) => c.metodo === "sendMessage" && c.corpo.chat_id === V5).at(-1)?.corpo.text;
+ok((await linhaVendedor(V5)) === undefined && ultimaV5 === "Você não faz parte da equipe de vendedores da Loja Ideal.", "/start recusado não grava em vendedores");
+
+statusPorUsuario.set(V3, "administrator");
+await tg({ update_id: upd++, message: { message_id: 1, chat: { id: V3, type: "private" }, from: { id: V3, first_name: "Teste Vendedor Tres" }, text: "/ranking" } });
+await espera();
+const logRanking = [...logs].reverse().find((l) => l.startsWith("[Telegram] /ranking respondido")) ?? "";
+ok(/^\[Telegram\] \/ranking respondido \((\d+ vendedores|vazio)\)$/.test(logRanking) && !logRanking.includes("Teste") && !logRanking.includes(String(V3)),
+  `/ranking com sucesso gera o log novo, sem nome nem ID ("${logRanking}")`);
 
 ok(externas.length === 0, `nenhuma chamada de rede externa (${externas.length})`);
 const senha = process.env.DB_PASSWORD ?? "";

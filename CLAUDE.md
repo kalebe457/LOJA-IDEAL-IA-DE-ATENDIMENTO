@@ -29,7 +29,7 @@ publicados, DMs não ENVIADAS) sem bloquear → verificações periódicas. Recu
 abertas (e assumidas com atividade < 20 min, com a IA calada); fecha as abertas inativas;
 resumos dentro do TTL (o mais restrito entre `TELEGRAM_RESUMO_TTL_HORAS` e o lock de 24 h) e
 os vendedores da tabela. Banco fora ou lento: aviso em destaque e sobe com a memória vazia.
-Vendedor que nunca assumiu não está no banco: depois de reiniciar, precisa do `/start` de novo.
+O `/start` aceito grava o vendedor em `vendedores` (5d.1), então ele volta sem novo `/start`.
 
 **Limitação conhecida:** um evento registrado em `eventos_processados` que estava na fila quando
 o processo morreu se perde (o texto não é guardado e a reentrega da Meta vira "duplicada").

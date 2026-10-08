@@ -32,6 +32,10 @@ const statusPorUsuario = new Map<number, string>();
 };
 
 const T = await import(B + "/src/telegramBot.ts");
+// Desde o 5d.1 o /start aceito grava em vendedores: marca o início para apagar só o que esta execução criou.
+const banco = await import(B + "/src/banco.ts");
+const limpeza = await import(B + "/tests/limpeza-espelho.mts");
+const inicio = await limpeza.inicioDaExecucao(banco.consultar);
 const logReal = console.log; const logs: string[] = [];
 console.log = (...a: any[]) => logs.push(a.join(" "));
 console.error = (...a: any[]) => logs.push(a.join(" "));
@@ -44,7 +48,8 @@ const ultimaPara = (id: number) => de("sendMessage").filter((c) => c.corpo.chat_
 const registrou = (id: number) => de("sendMessage").some((c) => c.corpo.chat_id === id && /registrado/.test(c.corpo.text));
 const dmsPara = (id: number) => de("sendMessage").filter((c) => c.corpo.chat_id === id && String(c.corpo.text).startsWith("🔒"));
 let upd = 1;
-const start = (id: number) => T.processarUpdateTelegram({ update_id: upd++, message: { message_id: 1, chat: { id, type: "private" }, from: { id, first_name: `U${id}` }, text: "/start" } });
+const idsStart = new Set<number>();
+const start = (id: number) => (idsStart.add(id), T.processarUpdateTelegram({ update_id: upd++, message: { message_id: 1, chat: { id, type: "private" }, from: { id, first_name: `U${id}` }, text: "/start" } }));
 const clique = (id: number, atd: string, msg: number) => T.processarUpdateTelegram({ update_id: upd++, callback_query: { id: `cb${upd}`, from: { id, first_name: `U${id}` }, data: `assumir:${atd}`, message: { message_id: msg, chat: { id: GRUPO, type: "supergroup" } } } });
 let humanos: string[] = [];
 function reset() { T.redefinirEstadoTelegramParaTestes(); T.definirAoAssumirAtendimento((id: string) => humanos.push(id)); chamadas = []; humanos = []; statusPorUsuario.clear(); }
@@ -142,5 +147,8 @@ await clique(72, "ATD-00000F0F0F", msgF);
 ok(ultimaResposta()?.text === "Antes de assumir um atendimento, abra @LojaIdealAtendimentoBot no privado e envie /start." && humanos.length === 0,
   "no grupo mas sem /start → orientação de /start no privado, sem lock");
 
+const vendedoresApagados = await limpeza.limparVendedoresDeTeste(banco.consultar, [...idsStart], inicio);
+logReal(`limpeza: ${vendedoresApagados} vendedor(es) de teste apagado(s)`);
+await banco.encerrarBanco();
 logReal(falhas ? `\n${total} verificações | ${falhas} FALHA(S)` : `\n${total} verificações | TODOS OS TESTES PASSARAM`);
 process.exit(falhas ? 1 : 0);

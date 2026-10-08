@@ -14,6 +14,26 @@ export const PREFIXO_CHAT_TESTE = "meta:999:";
 export const VENDEDOR_TESTE_MIN = 990_000_000_000;
 export const VENDEDOR_TESTE_MAX = 990_000_999_999;
 
+// Para as suítes antigas do Telegram, que fazem /start com IDs fictícios pequenos (10, 40, 111...):
+// marque o início com inicioDaExecucao() e, no fim, apague só os vendedores com esses IDs que
+// foram CRIADOS durante a execução e não têm atendimento. Linha real nunca é tocada.
+export async function inicioDaExecucao(consultar: Consultar): Promise<Date> {
+  return (await consultar("SELECT clock_timestamp() t")).rows[0].t;
+}
+
+export async function limparVendedoresDeTeste(consultar: Consultar, ids: number[], desde: Date): Promise<number> {
+  return (
+    (
+      await consultar(
+        `DELETE FROM vendedores
+          WHERE telegram_user_id = ANY($1::bigint[]) AND criado_em >= $2
+            AND NOT EXISTS (SELECT 1 FROM atendimentos a WHERE a.vendedor_id = vendedores.id)`,
+        [ids, desde],
+      )
+    ).rowCount ?? 0
+  );
+}
+
 export async function limparEspelhoDeTeste(
   consultar: Consultar,
 ): Promise<{ atendimentos: number; clientes: number; vendedores: number; restantes: number }> {

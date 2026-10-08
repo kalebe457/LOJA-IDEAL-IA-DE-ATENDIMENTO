@@ -25,6 +25,10 @@ let falharDMPara = new Set<number>();
 
 const B = new URL("..", import.meta.url).href.replace(/\/$/, "");
 const T = await import(B + "/src/telegramBot.ts");
+// Desde o 5d.1 o /start aceito grava em vendedores: marca o início para apagar só o que esta execução criou.
+const banco = await import(B + "/src/banco.ts");
+const limpeza = await import(B + "/tests/limpeza-espelho.mts");
+const inicio = await limpeza.inicioDaExecucao(banco.consultar);
 const logReal = console.log;
 console.log = () => {};
 const erros: string[] = [];
@@ -36,7 +40,8 @@ const de = (metodo: string) => chamadas.filter((c) => c.metodo === metodo);
 const respostas = () => de("answerCallbackQuery").map((c) => c.corpo.text as string);
 const dmsPara = (id: number) => de("sendMessage").filter((c) => c.corpo.chat_id === id && String(c.corpo.text).startsWith("🔒"));
 let upd = 1;
-const start = (id: number, nome: string) => T.processarUpdateTelegram({ update_id: upd++, message: { message_id: 1, chat: { id, type: "private" }, from: { id, first_name: nome }, text: "/start" } });
+const idsStart = new Set<number>();
+const start = (id: number, nome: string) => (idsStart.add(id), T.processarUpdateTelegram({ update_id: upd++, message: { message_id: 1, chat: { id, type: "private" }, from: { id, first_name: nome }, text: "/start" } }));
 const clique = (userId: number, atd: string, msgId: number, chat = GRUPO, cbId = `cb${upd}`) =>
   T.processarUpdateTelegram({ update_id: upd++, callback_query: { id: cbId, from: { id: userId, first_name: "x" }, data: `assumir:${atd}`, message: { message_id: msgId, chat: { id: chat, type: "supergroup" } } } });
 const resumo = (tel = "5591988887777") => ({ nome: "João", telefone: tel, produto: "Cimento CP-II", quantidade: "10 sacos", observacoes: "Nenhuma observação adicional." });
@@ -163,5 +168,8 @@ ok(T.segredoWebhookTelegramValido("errado") === false && T.segredoWebhookTelegra
 process.env.TELEGRAM_WEBHOOK_SECRET = "";
 ok(T.segredoWebhookTelegramValido("qualquer") === false, "sem TELEGRAM_WEBHOOK_SECRET configurado → tudo recusado");
 
+const vendedoresApagados = await limpeza.limparVendedoresDeTeste(banco.consultar, [...idsStart], inicio);
+logReal(`limpeza: ${vendedoresApagados} vendedor(es) de teste apagado(s)`);
+await banco.encerrarBanco();
 logReal(falhas ? `\n${falhas} FALHA(S)` : "\nTODOS OS TESTES PASSARAM");
 process.exit(falhas ? 1 : 0);

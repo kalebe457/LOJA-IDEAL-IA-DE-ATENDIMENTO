@@ -12,6 +12,7 @@ import {
   registrarAssuncao,
   registrarDmStatus,
   registrarResumoPublicado,
+  registrarVendedor,
 } from "./persistenciaAssuncao.js";
 
 import type {
@@ -873,6 +874,16 @@ async function processarStartPrivado(mensagem: TelegramMensagem): Promise<void> 
 
   console.log(`[Telegram] vendedor registrado pelo /start (user_id ${userId}).`);
 
+  /*
+   * Também no banco: depois de um reinício o vendedor volta sem
+   * novo /start. Falha de banco só gera log (a memória vale).
+   */
+  await registrarVendedor({
+    telegramUserId: userId,
+    nome: vendedor.nome,
+    chatPrivadoId: vendedor.chatPrivadoId,
+  });
+
   await chamarTelegram("sendMessage", {
     chat_id: vendedor.chatPrivadoId,
     text: "✅ Você está registrado para assumir atendimentos da Loja Ideal.",
@@ -1161,6 +1172,8 @@ async function processarRankingPrivado(mensagem: TelegramMensagem): Promise<void
   if (ranking.length === 0) {
     await responder(MENSAGEM_RANKING_VAZIO);
 
+    console.log("[Telegram] /ranking respondido (vazio)");
+
     return;
   }
 
@@ -1181,6 +1194,8 @@ async function processarRankingPrivado(mensagem: TelegramMensagem): Promise<void
       ),
     ].join("\n"),
   );
+
+  console.log(`[Telegram] /ranking respondido (${ranking.length} vendedores)`);
 }
 
 /**
