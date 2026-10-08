@@ -48,6 +48,12 @@ import {
   type TelegramUpdate,
 } from "./telegramBot.js";
 
+import {
+  idRegistravel,
+  registrarEventoRecebido,
+  type CanalEvento,
+} from "./eventosProcessados.js";
+
 import type { Cliente, ResultadoIA } from "./tipos.js";
 
 /*
@@ -95,10 +101,16 @@ const OPENWA_GROUP_CHAT_ID = process.env.OPENWA_GROUP_CHAT_ID ?? "";
 let webhookIniciadoEm = 0;
 
 /*
- * Evita processar o mesmo idempotencyKey
- * duas vezes enquanto o backend está ligado.
+ * Deduplicação SOMENTE dos eventos message.sent do OpenWA
+ * (mensagens ENVIADAS pelo número da loja), enquanto o backend
+ * está ligado. Um message.sent repetido, depois que o marcador de
+ * eco já foi consumido, seria confundido com mensagem manual do
+ * vendedor.
+ *
+ * Mensagens RECEBIDAS (Meta messages[] e OpenWA message.received)
+ * são deduplicadas no PostgreSQL (eventos_processados), nas rotas.
  */
-const processedMessages = new Set<string>();
+const eventosEnviadosProcessados = new Set<string>();
 
 /*
  * Garante que mensagens recebidas do mesmo
@@ -1604,6 +1616,57 @@ function tratarStatusMeta(status: MetaStatus): void {
 }
 
 /**
+ * ID externo do evento: idempotencyKey (corpo ou header do
+ * OpenWA; wamid na Meta) e, na falta dele, data.id.
+ */
+function chaveEventoExterno(payload: OpenWAEvent): string {
+  return payload.idempotencyKey ?? payload.data?.id ?? "";
+}
+
+/**
+ * Registra uma MENSAGEM RECEBIDA em eventos_processados.
+ *
+ * - "processar": evento novo, ou sem ID externo utilizável
+ *   (não registrável: segue o fluxo normal, como antes);
+ * - "duplicado": já registrado; não processar;
+ * - "falha": erro de banco; não processar e NÃO é duplicata.
+ */
+async function registrarMensagemRecebida(
+  canal: CanalEvento,
+  chave: string,
+): Promise<"processar" | "duplicado" | "falha"> {
+  if (!idRegistravel(chave)) {
+    if (chave !== "") {
+      console.warn(
+        `[Dedup] ${canal}: ID externo com ${chave.length} caracteres não cabe em eventos_processados; processado sem deduplicação.`,
+      );
+    }
+
+    return "processar";
+  }
+
+  try {
+    const resultado = await registrarEventoRecebido(canal, chave);
+
+    if (resultado === "duplicado") {
+      console.log(`[Dedup] ${canal}: mensagem duplicada ignorada: ${mascararChatId(chave)}`);
+
+      return "duplicado";
+    }
+
+    return "processar";
+  } catch (erro: unknown) {
+    const codigo = (erro as { code?: unknown })?.code;
+
+    console.error(
+      `[Dedup] ${canal}: falha ao registrar em eventos_processados (${typeof codigo === "string" ? codigo : erro instanceof Error ? erro.name : "erro"}); mensagem NÃO processada.`,
+    );
+
+    return "falha";
+  }
+}
+
+/**
  * Processa um evento do OpenWA.
  */
 async function processarEvento(payload: OpenWAEvent): Promise<void> {
@@ -1625,21 +1688,24 @@ async function processarEvento(payload: OpenWAEvent): Promise<void> {
   }
 
   /*
-   * O idempotencyKey é a chave principal.
+   * Mensagens RECEBIDAS já foram deduplicadas no PostgreSQL
+   * (eventos_processados) pela rota, antes de chegar aqui.
    *
-   * O header é usado como fallback
-   * dentro do servidor.
+   * message.sent (enviadas pelo número da loja) continua com
+   * deduplicação em memória, marcada logo na chegada.
    */
-  const chave = payload.idempotencyKey ?? data.id ?? "";
+  if (payload.event === "message.sent") {
+    const chave = chaveEventoExterno(payload);
 
-  /*
-   * Se esse evento já passou pelo backend,
-   * ignoramos.
-   */
-  if (chave && processedMessages.has(chave)) {
-    console.log(`Evento duplicado ignorado: ${chave}`);
+    if (chave && eventosEnviadosProcessados.has(chave)) {
+      console.log(`Evento message.sent duplicado ignorado: ${mascararChatId(chave)}`);
 
-    return;
+      return;
+    }
+
+    if (chave) {
+      eventosEnviadosProcessados.add(chave);
+    }
   }
 
   /*
@@ -1665,10 +1731,6 @@ async function processarEvento(payload: OpenWAEvent): Promise<void> {
       ].join(" | "),
     );
 
-    if (chave) {
-      processedMessages.add(chave);
-    }
-
     return;
   }
 
@@ -1689,19 +1751,7 @@ async function processarEvento(payload: OpenWAEvent): Promise<void> {
       ].join(" | "),
     );
 
-    if (chave) {
-      processedMessages.add(chave);
-    }
-
     return;
-  }
-
-  /*
-   * A partir daqui o evento é considerado
-   * realmente novo.
-   */
-  if (chave) {
-    processedMessages.add(chave);
   }
 
   /*
@@ -1874,10 +1924,34 @@ export function iniciarWebhook(): void {
           }
 
           /*
-           * Responde rapidamente à Meta.
+           * Deduplicação persistente das mensagens recebidas
+           * (messages[]) ANTES de responder. statuses[] NÃO passa
+           * por aqui: trazem o mesmo wamid da mensagem original.
            */
-          responderJson(response, 200, {
-            received: true,
+          const mensagensNovas: OpenWAEvent[] = [];
+
+          let falhaRegistro = false;
+
+          for (const evento of normalizarMensagensMeta(payloadMeta)) {
+            const registro = await registrarMensagemRecebida(
+              "META",
+              chaveEventoExterno(evento),
+            );
+
+            if (registro === "processar") {
+              mensagensNovas.push(evento);
+            } else if (registro === "falha") {
+              falhaRegistro = true;
+            }
+          }
+
+          /*
+           * Falha ao registrar: 5xx para a Meta reenviar. As
+           * mensagens registradas nesta mesma entrega seguem
+           * normalmente (no reenvio serão duplicatas).
+           */
+          responderJson(response, falhaRegistro ? 503 : 200, {
+            received: !falhaRegistro,
           });
 
           processarPayloadMeta(payloadMeta);
@@ -1901,7 +1975,7 @@ export function iniciarWebhook(): void {
            * messages[] entram no mesmo núcleo
            * de atendimento do OpenWA.
            */
-          for (const evento of normalizarMensagensMeta(payloadMeta)) {
+          for (const evento of mensagensNovas) {
             processarEvento(evento).catch((erro: unknown) => {
               console.error(
                 "Erro ao processar mensagem da Meta:",
@@ -1967,6 +2041,30 @@ export function iniciarWebhook(): void {
 
       if (!payload.idempotencyKey && typeof idempotencyHeader === "string") {
         payload.idempotencyKey = idempotencyHeader;
+      }
+
+      /*
+       * Deduplicação persistente das mensagens RECEBIDAS antes de
+       * responder. message.sent segue para o fluxo atual (eco e
+       * deduplicação em memória).
+       */
+      if (payload.event === "message.received") {
+        const registro = await registrarMensagemRecebida(
+          "OPENWA",
+          chaveEventoExterno(payload),
+        );
+
+        if (registro === "duplicado") {
+          responderJson(response, 200, { received: true });
+
+          return;
+        }
+
+        if (registro === "falha") {
+          responderJson(response, 503, { received: false });
+
+          return;
+        }
       }
 
       /*
