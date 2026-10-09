@@ -71,7 +71,9 @@ for (const k of ["log", "warn", "error"] as const) console[k] = (...a: unknown[]
 const webhook = await import(B + "/src/webhook.ts");
 const banco = await import(B + "/src/banco.ts");
 await exigirBancoDeTeste(banco.consultar);
-const { MENSAGEM_LOJA_FECHADA } = await import(B + "/src/horarioFuncionamento.ts");
+const { MENSAGEM_LOJA_FECHADA, MENSAGEM_DIA_FECHADO } = await import(B + "/src/horarioFuncionamento.ts");
+// Texto exato pedido para o dia fechado manualmente (fora do horário normal continua MENSAGEM_LOJA_FECHADA).
+const TEXTO_DIA_FECHADO = "Olá! Hoje a Loja Ideal não está funcionando. Retornaremos no próximo dia de atendimento.";
 
 let falhas = 0, total = 0;
 const ok = (c: boolean, t: string) => { total++; if (!c) falhas++; out(`${c ? "OK  " : "FAIL"} ${t}`); };
@@ -114,10 +116,11 @@ ok((await datasNoBanco()) === "2026-10-07" && logs.some((l) => l === "[Loja] fec
 const grupo0 = paraGrupo();
 await mensagem(TEL(2), "oi");
 await mensagem(TEL(2), "tem cimento?");
-ok(JSON.stringify(recebeu(TEL(2))) === JSON.stringify([MENSAGEM_LOJA_FECHADA]), "cliente novo: exatamente a mensagem de loja fechada, uma vez por período");
+ok(MENSAGEM_DIA_FECHADO === TEXTO_DIA_FECHADO && JSON.stringify(recebeu(TEL(2))) === JSON.stringify([TEXTO_DIA_FECHADO]),
+  "cliente novo: exatamente a mensagem de dia fechado, uma vez por período");
 ok((await atendimentos(TEL(2))) === 0 && webhook.lerEstadoEspelhavel(chat(TEL(2))) === null && paraGrupo() === grupo0, "nenhum atendimento criado e nada no grupo");
 await mensagem(TEL(1), "Ana");
-ok(recebeu(TEL(1)).length === 2 && !recebeu(TEL(1)).includes(MENSAGEM_LOJA_FECHADA), "conversa que já estava em andamento continua (mesma regra do horário)");
+ok(recebeu(TEL(1)).length === 2 && !recebeu(TEL(1)).includes(TEXTO_DIA_FECHADO), "conversa que já estava em andamento continua (mesma regra do horário)");
 
 out("\n== /abrir ==");
 const a1 = await comando(ADMIN, "/abrir");
@@ -125,6 +128,11 @@ ok(a1.resposta === "Fechamento de quarta, 07/10 removido. A loja segue o horári
 await mensagem(TEL(3), "oi");
 ok(recebeu(TEL(3))[0]?.startsWith("Olá!") === true && (await atendimentos(TEL(3))) === 1, "volta a atender normalmente");
 ok((await comando(ADMIN, "/abrir")).resposta === "Não havia fechamento marcado em quarta, 07/10.", "/abrir sem fechamento: avisa que não havia");
+relogio("2026-10-07T22:00:00-03:00");
+await mensagem(TEL(8), "oi");
+relogio("2026-10-07T10:00:00-03:00");
+ok(JSON.stringify(recebeu(TEL(8))) === JSON.stringify([MENSAGEM_LOJA_FECHADA]) && MENSAGEM_LOJA_FECHADA !== TEXTO_DIA_FECHADO,
+  "fora do horário normal (22:00, dia não fechado): continua a mensagem de fora do horário");
 
 out("\n== /fechar 25/12 ==");
 const f2 = await comando(ADMIN, "/fechar 25/12");
@@ -134,7 +142,10 @@ await mensagem(TEL(4), "oi");
 ok(recebeu(TEL(4))[0]?.startsWith("Olá!") === true, "24/12 (quinta): atende");
 relogio("2026-12-25T10:00:00-03:00");
 await mensagem(TEL(5), "oi");
-ok(JSON.stringify(recebeu(TEL(5))) === JSON.stringify([MENSAGEM_LOJA_FECHADA]) && (await atendimentos(TEL(5))) === 0, "25/12 (sexta, fechado): aviso de loja fechada");
+ok(JSON.stringify(recebeu(TEL(5))) === JSON.stringify([TEXTO_DIA_FECHADO]) && (await atendimentos(TEL(5))) === 0, "25/12 (sexta, fechado): mensagem de dia fechado");
+relogio("2026-12-25T21:00:00-03:00");
+await mensagem(TEL(9), "oi");
+ok(JSON.stringify(recebeu(TEL(9))) === JSON.stringify([TEXTO_DIA_FECHADO]), "25/12 às 21:00 (fechado e fora do horário): continua a mensagem de dia fechado (vale o dia inteiro)");
 relogio("2026-12-26T10:00:00-03:00");
 await mensagem(TEL(6), "oi");
 ok(recebeu(TEL(6))[0]?.startsWith("Olá!") === true, "26/12 (sábado): atende (o fechamento acabou à meia-noite)");
@@ -145,7 +156,7 @@ await banco.consultar("INSERT INTO fechamentos (data) VALUES ('2026-12-01')"); /
 webhook.redefinirEstadoWebhookParaTestes();
 await webhook.recuperarNaPartida();
 await mensagem(TEL(7), "oi");
-ok(JSON.stringify(recebeu(TEL(7))) === JSON.stringify([MENSAGEM_LOJA_FECHADA]) && logs.some((l) => l === "[Loja] fechamentos manuais carregados: 1"),
+ok(JSON.stringify(recebeu(TEL(7))) === JSON.stringify([TEXTO_DIA_FECHADO]) && logs.some((l) => l === "[Loja] fechamentos manuais carregados: 1"),
   "depois do reinício continua fechado (só os fechamentos de hoje em diante voltam)");
 
 out("\n== Permissão ==");

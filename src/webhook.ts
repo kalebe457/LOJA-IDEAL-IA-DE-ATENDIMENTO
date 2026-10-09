@@ -46,7 +46,7 @@ import {
 
 import {
   AVISO_ENCAMINHAMENTO_FORA_DO_HORARIO,
-  MENSAGEM_LOJA_FECHADA,
+  mensagemLojaFechada,
   chavePeriodoFechado,
   dataLocal,
   definirDiasFechados,
@@ -593,7 +593,7 @@ async function avisarLojaFechada(chatId: string): Promise<void> {
    */
   const modoSomenteLog = !metaEnvioAtivo();
 
-  const envio = await enviarAoCliente(chatId, MENSAGEM_LOJA_FECHADA);
+  const envio = await enviarAoCliente(chatId, mensagemLojaFechada());
 
   const enviado = envio?.aceito === true;
 

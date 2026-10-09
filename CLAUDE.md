@@ -22,7 +22,7 @@ vendedores no Telegram → vendedor assume e continua a venda pelo WhatsApp dele
   mês (America/Belem) e no total. Não está no menu do bot (setMyCommands não registrado).
 - **`/fechar [DD/MM]`, `/abrir [DD/MM]`, `/fechamentos`** (mesma regra do `/ranking`): fechamento
   manual do dia inteiro (Belém; sem data = hoje; data já passada no ano = próximo ano). Entra em
-  `lojaAberta()`: o cliente recebe o aviso de loja fechada, sem atendimento; conversa em andamento
+  `lojaAberta()`: o cliente recebe a mensagem própria de dia fechado (`MENSAGEM_DIA_FECHADO`, uma por período), sem atendimento; conversa em andamento
   continua, como no fim do horário. Memória + tabela `fechamentos` (sql/004), recarregada na partida.
 - **PostgreSQL `loja_ideal`:** deduplicação de `messages[]` em `eventos_processados` (falha → 503)
   e espelho de cliente/atendimento (`persistenciaAtendimento.ts`). A **memória é a fonte de

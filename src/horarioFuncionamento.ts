@@ -53,6 +53,13 @@ export const MENSAGEM_LOJA_FECHADA =
   "Olá! No momento a Loja Ideal está fechada. Nosso horário de atendimento é de segunda a sexta, das 8h às 19h, e aos sábados, das 8h às 15h. Retornaremos durante o próximo horário de atendimento.";
 
 /*
+ * Enviada (uma vez por período) num dia fechado manualmente
+ * pelo /fechar, no lugar da mensagem de fora do horário.
+ */
+export const MENSAGEM_DIA_FECHADO =
+  "Olá! Hoje a Loja Ideal não está funcionando. Retornaremos no próximo dia de atendimento.";
+
+/*
  * Acrescentada ao encaminhamento para o vendedor
  * quando uma triagem iniciada antes do fechamento
  * termina com a loja já fechada.
@@ -144,6 +151,15 @@ export function removerDiaFechado(data: string): boolean {
  */
 export function listarDiasFechados(desde: string): string[] {
   return [...diasFechados].filter((data) => data >= desde).sort();
+}
+
+/**
+ * Aviso para quem escreve com a loja fechada: dia fechado
+ * manualmente (o dia inteiro) tem mensagem própria; fora do
+ * horário normal, a mensagem com o horário de atendimento.
+ */
+export function mensagemLojaFechada(instante = Date.now()): string {
+  return diasFechados.has(momentoLocal(instante).data) ? MENSAGEM_DIA_FECHADO : MENSAGEM_LOJA_FECHADA;
 }
 
 /**
