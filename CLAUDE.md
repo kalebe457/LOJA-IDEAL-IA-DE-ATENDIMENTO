@@ -27,7 +27,7 @@ vendedores no Telegram → vendedor assume e continua a venda pelo WhatsApp dele
 - **PostgreSQL `loja_ideal`:** deduplicação de `messages[]` em `eventos_processados` (falha → 503)
   e espelho de cliente/atendimento (`persistenciaAtendimento.ts`). A **memória é a fonte de
   verdade**; o banco segue pelo `codigo` (`ATD-` + 10 hex). Falha no espelho só gera log.
-- Migrations em `sql/` (001, 002 aplicadas no loja_ideal; 003 e 004 só com autorização). Nunca editar migration aplicada; mudança = nova.
+- Migrations em `sql/` (001 a 004 aplicadas no loja_ideal; nova migration no banco real só com autorização). Nunca editar migration aplicada; mudança = nova.
 
 ## Partida (Passo 5d)
 
