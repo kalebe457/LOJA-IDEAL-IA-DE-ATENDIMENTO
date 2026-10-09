@@ -1,5 +1,6 @@
 // Recria do zero o schema do banco de TESTES (loja_ideal_teste): apaga o schema public e aplica
-// sql/001 e sql/002, na ordem. Roda antes das suítes (tests/run-all.mjs) e por `npm run test:db`.
+// TODAS as migrations de sql/ (NNN_*.sql), em ordem. Roda antes das suítes (tests/run-all.mjs) e
+// por `npm run test:db`. Sem nenhuma migration encontrada, aborta.
 //
 // TRAVA DUPLA, nada é executado se qualquer uma falhar:
 //   1. o nome do banco é a constante BANCO abaixo (pedido de outro nome: aborta antes de conectar);
@@ -8,13 +9,15 @@
 // Nunca usa DROP DATABASE. Nunca toca em loja_ideal (dado real), betgestor ou outro banco.
 // Conexão: DB_HOST, DB_PORT, DB_USER e DB_PASSWORD do .env (DB_NAME do .env é IGNORADO).
 import "dotenv/config";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import pg from "pg";
 
 const BANCO = "loja_ideal_teste";
 
-const MIGRATIONS = ["001_schema_inicial.sql", "002_estado_persistente.sql"];
+const PASTA_SQL = fileURLToPath(new URL("../sql/", import.meta.url));
+
+const MIGRATIONS = readdirSync(PASTA_SQL).filter((arquivo) => /^\d{3}_.*\.sql$/.test(arquivo)).sort();
 
 type Cliente = { query(texto: string): Promise<{ rows: any[] }>; end(): Promise<void> };
 
@@ -42,6 +45,10 @@ export async function prepararBancoDeTeste(nome: string = BANCO, conectar: Conec
   // Trava 1: o nome.
   if (nome !== BANCO) {
     throw new Error(`ABORTADO: o preparo só roda em ${BANCO} (pedido: "${nome}"); nada foi executado.`);
+  }
+
+  if (MIGRATIONS.length === 0) {
+    throw new Error("ABORTADO: nenhuma migration encontrada em sql/; nada foi executado.");
   }
 
   let cliente: Cliente;
@@ -77,10 +84,8 @@ export async function prepararBancoDeTeste(nome: string = BANCO, conectar: Conec
 
     await cliente.query("CREATE SCHEMA public");
 
-    const pasta = fileURLToPath(new URL("../sql/", import.meta.url));
-
     for (const arquivo of MIGRATIONS) {
-      await cliente.query(readFileSync(pasta + arquivo, "utf8"));
+      await cliente.query(readFileSync(PASTA_SQL + arquivo, "utf8"));
     }
   } finally {
     await cliente.end();

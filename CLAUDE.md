@@ -23,7 +23,7 @@ vendedores no Telegram → vendedor assume e continua a venda pelo WhatsApp dele
 - **PostgreSQL `loja_ideal`:** deduplicação de `messages[]` em `eventos_processados` (falha → 503)
   e espelho de cliente/atendimento (`persistenciaAtendimento.ts`). A **memória é a fonte de
   verdade**; o banco segue pelo `codigo` (`ATD-` + 10 hex). Falha no espelho só gera log.
-- Migrations em `sql/` (001, 002 já aplicadas). Nunca editar migration aplicada; mudança = nova.
+- Migrations em `sql/` (001, 002 aplicadas no loja_ideal; 003 só com autorização). Nunca editar migration aplicada; mudança = nova.
 
 ## Partida (Passo 5d)
 
@@ -37,6 +37,18 @@ O `/start` aceito grava o vendedor em `vendedores` (5d.1), então ele volta sem 
 
 **Limitação conhecida:** um evento registrado em `eventos_processados` que estava na fila quando
 o processo morreu se perde (o texto não é guardado e a reentrega da Meta vira "duplicada").
+
+## Retenção de dados (LGPD)
+
+Prazos em `src/retencao.ts` (`PRAZOS_RETENCAO`, único lugar), só para atendimentos ENCERRADOS:
+mensagens (texto da conversa) apagadas **60 dias** após o encerramento; atendimento
+**anonimizado 365 dias** após o encerramento (sem nome/produto/quantidade/observações, `chat_id`
+`meta:anon:<codigo>`, sem cliente; ficam codigo, datas e vendedor para o `/ranking`); cliente
+apagado quando nenhum atendimento aponta para ele (criado há mais de 365 dias);
+`eventos_processados` apagados com **7 dias**. Vendedores não são tocados. Roda na partida e a cada
+24 h, em lotes de 500. Pedido do titular: `node --import tsx scripts/apagar-cliente.mts <telefone>`
+(simula) e `... --confirmar` (apaga mensagens, anonimiza atendimentos e apaga o cliente; recusa se
+houver atendimento aberto). Requer a migration 003 (`cliente_id` opcional).
 
 ## Segurança (inegociável)
 

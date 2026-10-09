@@ -5,6 +5,8 @@
 // Banco de TESTES (loja_ideal_teste) fixado antes de qualquer import de src/; loja_ideal é dado real.
 const { exigirBancoDeTeste } = await import(new URL("./banco-teste.mts", import.meta.url).href);
 import { createHmac } from "node:crypto";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 Object.assign(process.env, {
   PORT: "39884",
@@ -235,6 +237,25 @@ const rec = await webhook.recuperarNaPartida();
 if (rec.ok) await T.reenviarPendenciasRecuperadas(rec.resumosNaoPublicados);
 await espera();
 ok(rec.ok && tudo().includes("[Recuperação] concluída"), "recuperação na partida");
+
+// 11. Retenção com dados-canário envelhecidos (o atendimento da triagem vira anonimizável).
+await banco.consultar("UPDATE atendimentos SET encerrado_em = now() - interval '400 days' WHERE codigo = $1", [cod1]);
+const retencao = await import(B + "/src/retencao.ts");
+const ret = await retencao.executarRetencao();
+ok(ret !== null && ret.atendimentos >= 1 && tudo().includes("[Retenção] mensagens apagadas:"), "retenção (anonimizou o atendimento-canário)");
+
+// 12. Script do titular (processo filho): simulação, recusa (atendimento aberto) e execução.
+const raiz = fileURLToPath(new URL("..", import.meta.url));
+const script = (...args: string[]) => {
+  const r = spawnSync(process.execPath, ["--import", "tsx", "scripts/apagar-cliente.mts", ...args], { cwd: raiz, encoding: "utf8", timeout: 60_000 });
+  saida.push(r.stdout, r.stderr);
+  return r;
+};
+const sim = script(TEL.dm);
+const rec2 = script(TEL.recusa, "--confirmar");
+const exe = script(TEL.dm, "--confirmar");
+ok(sim.stdout.includes("SIMULAÇÃO") && rec2.stdout.includes("RECUSADO") && exe.status === 0 && exe.stdout.includes("cliente apagado"),
+  "script apagar-cliente: simulação, recusa e execução");
 
 out("\n== Nenhum canário na saída ==");
 const texto = tudo();

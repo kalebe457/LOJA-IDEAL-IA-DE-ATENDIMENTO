@@ -12,6 +12,8 @@ import { IAClaude } from "./iaClaude.js";
 
 import { descreverErro, mascararChatId, valorSeguro, wamidSeguro } from "./logSeguro.js";
 
+import { agendarRetencao } from "./retencao.js";
+
 import {
   motivoDaFalhaEnvio,
   registrarEnvioAceito,
@@ -1637,6 +1639,11 @@ export async function iniciarWebhook(): Promise<void> {
         console.error(`[Recuperação] falha ao reenviar pendências (${descreverErro(erro)}).`);
       });
   }
+
+  /*
+   * Retenção de dados (LGPD): agora, sem bloquear, e a cada 24 h.
+   */
+  agendarRetencao();
 
   /*
    * Verifica inatividade a cada 30 segundos

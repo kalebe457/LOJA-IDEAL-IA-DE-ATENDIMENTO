@@ -11,6 +11,9 @@ type Consultar = (texto: string, parametros?: unknown[]) => Promise<{ rows: any[
 
 export const PREFIXO_CHAT_TESTE = "meta:999:";
 
+// Atendimentos anonimizados pela retenção perdem o telefone: chat_id = meta:anon:<codigo>. No banco de
+// testes (única base onde esta limpeza roda) eles também são de teste.
+
 const BANCO_TESTE = "loja_ideal_teste";
 
 async function exigirBancoDeTeste(consultar: Consultar): Promise<void> {
@@ -53,30 +56,31 @@ export async function limparEspelhoDeTeste(
   await exigirBancoDeTeste(consultar);
 
   const ids = (
-    await consultar("SELECT DISTINCT cliente_id FROM atendimentos WHERE chat_id LIKE $1", [PREFIXO_CHAT_TESTE + "%"])
+    await consultar("SELECT DISTINCT cliente_id FROM atendimentos WHERE (chat_id LIKE $1 OR chat_id LIKE 'meta:anon:%')", [PREFIXO_CHAT_TESTE + "%"])
   ).rows.map((r) => r.cliente_id);
 
   const idsVendedores = (
-    await consultar("SELECT DISTINCT vendedor_id FROM atendimentos WHERE chat_id LIKE $1 AND vendedor_id IS NOT NULL", [
+    await consultar("SELECT DISTINCT vendedor_id FROM atendimentos WHERE (chat_id LIKE $1 OR chat_id LIKE 'meta:anon:%') AND vendedor_id IS NOT NULL", [
       PREFIXO_CHAT_TESTE + "%",
     ])
   ).rows.map((r) => r.vendedor_id);
 
   // mensagens primeiro: FK RESTRICT para atendimentos.
   await consultar(
-    "DELETE FROM mensagens WHERE atendimento_id IN (SELECT id FROM atendimentos WHERE chat_id LIKE $1)",
+    "DELETE FROM mensagens WHERE atendimento_id IN (SELECT id FROM atendimentos WHERE (chat_id LIKE $1 OR chat_id LIKE 'meta:anon:%'))",
     [PREFIXO_CHAT_TESTE + "%"],
   );
 
   const atendimentos =
-    (await consultar("DELETE FROM atendimentos WHERE chat_id LIKE $1", [PREFIXO_CHAT_TESTE + "%"])).rowCount ?? 0;
+    (await consultar("DELETE FROM atendimentos WHERE (chat_id LIKE $1 OR chat_id LIKE 'meta:anon:%')", [PREFIXO_CHAT_TESTE + "%"])).rowCount ?? 0;
 
   const clientes =
     (
       await consultar(
+        // Também os órfãos (cliente de atendimento anonimizado): no banco de testes tudo é de teste.
         `DELETE FROM clientes
-          WHERE id = ANY($1::bigint[])
-            AND NOT EXISTS (SELECT 1 FROM atendimentos a WHERE a.cliente_id = clientes.id)`,
+          WHERE NOT EXISTS (SELECT 1 FROM atendimentos a WHERE a.cliente_id = clientes.id)
+            AND (id = ANY($1::bigint[]) OR telefone LIKE '5591%')`,
         [ids],
       )
     ).rowCount ?? 0;
@@ -92,7 +96,7 @@ export async function limparEspelhoDeTeste(
     ).rowCount ?? 0;
 
   const restantes = Number(
-    (await consultar("SELECT count(*) n FROM atendimentos WHERE chat_id LIKE $1", [PREFIXO_CHAT_TESTE + "%"])).rows[0]?.n ?? 0,
+    (await consultar("SELECT count(*) n FROM atendimentos WHERE (chat_id LIKE $1 OR chat_id LIKE 'meta:anon:%')", [PREFIXO_CHAT_TESTE + "%"])).rows[0]?.n ?? 0,
   );
 
   return { atendimentos, clientes, vendedores, restantes };
