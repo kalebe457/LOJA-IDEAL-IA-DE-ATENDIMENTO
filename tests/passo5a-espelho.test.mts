@@ -1,6 +1,8 @@
 // Passo 5a: cliente + atendimento espelhados no PostgreSQL (a memória continua sendo a verdade).
-// Servidor real + banco real (loja_ideal). Chat de teste: "meta:999:<telefone fictício 55919000005xx>",
+// Servidor real + banco de testes (loja_ideal_teste). Chat de teste: "meta:999:<telefone fictício 55919000005xx>",
 // wamids "teste-5a-...". Claude, Telegram e Meta simulados; rede externa bloqueada.
+// Banco de TESTES (loja_ideal_teste) fixado antes de qualquer import de src/; loja_ideal é dado real.
+const { exigirBancoDeTeste } = await import(new URL("./banco-teste.mts", import.meta.url).href);
 import { createHmac } from "node:crypto";
 
 Object.assign(process.env, {
@@ -61,6 +63,7 @@ for (const k of ["log", "warn", "error"] as const) console[k] = (...a: unknown[]
 
 const { iniciarWebhook } = await import(B + "/src/webhook.ts");
 const banco = await import(B + "/src/banco.ts");
+await exigirBancoDeTeste(banco.consultar);
 iniciarWebhook();
 await new Promise((r) => setTimeout(r, 400));
 

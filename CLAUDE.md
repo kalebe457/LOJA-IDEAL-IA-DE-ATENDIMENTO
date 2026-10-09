@@ -51,8 +51,15 @@ Garantido por `tests/passo3-ordem-lote.test.mts`.
 
 ## Testes
 
+- **Testes só em `loja_ideal_teste`; `loja_ideal` é dado real.** Toda suíte carrega
+  `tests/banco-teste.mts` como PRIMEIRA instrução (fixa `DB_NAME` e o número fictício `999`
+  antes de importar `src/`) e chama `exigirBancoDeTeste(banco.consultar)`: outro banco → aborta.
+  Host, porta, usuário e senha continuam vindo do `.env` (que não é editado nem copiado).
+- `npm run test:db` recria do zero o schema de `loja_ideal_teste` (cria o banco se não existir) e
+  aplica `sql/001` e `sql/002`. Trava dupla: nome por constante + `current_database()` antes de
+  qualquer DROP/CREATE. O `npm test` faz isso antes das suítes. Nunca `DROP DATABASE`.
 - Ficam em `tests/`; `npm test` roda `tests/run-all.mjs` (sequencial, exit ≠ 0 se algo falhar).
-  Suíte nova precisa ser adicionada ao `run-all.mjs`.
+  Suíte nova precisa ser adicionada ao `run-all.mjs` e carregar `tests/banco-teste.mts` primeiro.
 - Credenciais FALSAS definidas antes dos imports; `fetch` simulado/bloqueado (só `127.0.0.1`).
   Podem ler `DB_*` do `.env` em tempo de execução, nunca copiar valores.
 - Mensagens de teste usam `phone_number_id` fictício `999` → `chat_id` `meta:999:<tel fictício>`.
@@ -68,8 +75,8 @@ Garantido por `tests/passo3-ordem-lote.test.mts`.
 1. Inspecionar o código real antes de editar; se algo divergir do pedido, explicar e escolher a
    menor alteração.
 2. Um passo por vez; não antecipar passos seguintes nem refatorar fora do escopo.
-3. Antes de commitar: `npm test`, `npx tsc --noEmit`, `git diff --check`, conferência (só leitura)
-   de que não sobraram dados de teste.
+3. Antes de commitar: `npm test`, `npx tsc --noEmit`, `git diff --check` e conferência (só
+   leitura) de que as contagens de `loja_ideal` não mudaram.
 4. Commit só dos arquivos do passo (`git diff --cached --name-only`); se algo falhar, não commitar.
 5. Fim de linha LF (`.gitattributes`). Commits em português, push em `origin master`.
 

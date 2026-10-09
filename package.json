@@ -4,7 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "node tests/run-all.mjs"
+    "test": "node tests/run-all.mjs",
+    "test:db": "node --import tsx tests/preparar-banco-teste.mts"
   },
   "keywords": [],
   "author": "",

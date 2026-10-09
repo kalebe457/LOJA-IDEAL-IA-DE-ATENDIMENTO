@@ -7,16 +7,40 @@
 //   mostrar todas as falhas.
 // - Código de saída: 0 se todas passarem; 1 se qualquer uma falhar.
 //
-// Requisitos: dependências instaladas (npm install) e o PostgreSQL local com o
-// banco loja_ideal (variáveis DB_* no .env). Nenhuma suíte acessa a internet:
+// Requisitos: dependências instaladas (npm install) e o PostgreSQL local (host, porta,
+// usuário e senha das variáveis DB_* do .env). Nenhuma suíte acessa a internet:
 // Meta, Telegram e Anthropic são simulados dentro de cada teste.
+//
+// Banco: SÓ loja_ideal_teste (loja_ideal é dado real). Antes das suítes o schema dele é
+// recriado do zero (tests/preparar-banco-teste.mts); se o preparo falhar, nada roda.
+// Cada suíte recebe DB_NAME=loja_ideal_teste e ainda confere current_database() no início.
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 const raiz = fileURLToPath(new URL("..", import.meta.url));
 
+const BANCO_TESTE = "loja_ideal_teste";
+
+const ambiente = { ...process.env, DB_NAME: BANCO_TESTE };
+
+console.log(`========== preparo do banco de testes (${BANCO_TESTE}) ==========`);
+
+const preparo = spawnSync(process.execPath, ["--import", "tsx", path.join("tests", "preparar-banco-teste.mts")], {
+  cwd: raiz,
+  stdio: "inherit",
+  env: ambiente,
+  timeout: 60_000,
+});
+
+if (preparo.status !== 0) {
+  console.log(`\nPreparo do banco de testes falhou (exit ${preparo.status ?? preparo.signal}): nenhuma suíte foi executada.`);
+
+  process.exit(1);
+}
+
 const SUITES = [
+  "banco-teste-protecao.test.mts",
   "passo4-somente-log.test.mts",
   "passo4-meta-envio.test.mts",
   "telegram-e2e.test.mts",
@@ -50,7 +74,7 @@ for (const [indice, suite] of SUITES.entries()) {
   const execucao = spawnSync(
     process.execPath,
     ["--import", "tsx", path.join("tests", suite)],
-    { cwd: raiz, stdio: "inherit", timeout: TIMEOUT_MS },
+    { cwd: raiz, stdio: "inherit", timeout: TIMEOUT_MS, env: ambiente },
   );
 
   const segundos = ((Date.now() - inicio) / 1000).toFixed(1);

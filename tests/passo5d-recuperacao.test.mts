@@ -1,8 +1,10 @@
-// Passo 5d: recuperação na partida. Servidor real + banco real (loja_ideal). O "reinício" é simulado
+// Passo 5d: recuperação na partida. Servidor real + banco de testes (loja_ideal_teste). O "reinício" é simulado
 // zerando a memória (redefinirEstadoWebhookParaTestes) e chamando a mesma recuperação da partida.
 // A partida de verdade (ordem listen × recuperação, banco fora, SIGKILL) está em passo5d-reinicio.test.mts.
 // Chats "meta:999:<telefone fictício 55919000009xx>", wamids "teste-5d-...", vendedores 990000000101+.
 // Claude, Meta e Telegram simulados; rede externa bloqueada.
+// Banco de TESTES (loja_ideal_teste) fixado antes de qualquer import de src/; loja_ideal é dado real.
+const { exigirBancoDeTeste } = await import(new URL("./banco-teste.mts", import.meta.url).href);
 import { createHmac } from "node:crypto";
 
 Object.assign(process.env, {
@@ -85,6 +87,7 @@ for (const k of ["log", "warn", "error"] as const) console[k] = (...a: unknown[]
 
 const webhook = await import(B + "/src/webhook.ts");
 const banco = await import(B + "/src/banco.ts");
+await exigirBancoDeTeste(banco.consultar);
 const T = await import(B + "/src/telegramBot.ts");
 
 let falhas = 0, total = 0;

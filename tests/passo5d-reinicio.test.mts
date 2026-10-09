@@ -1,7 +1,9 @@
 // Passo 5d: reinício REAL. O backend roda num processo filho (tests/processo-backend-teste.mts), com
-// Meta, Telegram e Claude simulados e banco real (loja_ideal). O filho é morto com SIGKILL (no Windows,
+// Meta, Telegram e Claude simulados e banco de testes (loja_ideal_teste). O filho é morto com SIGKILL (no Windows,
 // TerminateProcess: sem shutdown limpo) e outro sobe no lugar, fazendo a recuperação na partida.
 // Chats "meta:999:<telefone fictício 55919000010xx>", wamids "teste-5d-r-...".
+// Banco de TESTES (loja_ideal_teste) fixado antes de qualquer import de src/; loja_ideal é dado real.
+const { exigirBancoDeTeste } = await import(new URL("./banco-teste.mts", import.meta.url).href);
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHmac } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -23,6 +25,7 @@ const ok = (c: boolean, t: string) => { total++; if (!c) falhas++; out(`${c ? "O
 const espera = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const banco = await import(B + "/src/banco.ts");
+await exigirBancoDeTeste(banco.consultar);
 const previos = Number((await banco.consultar("SELECT count(*) n FROM atendimentos WHERE chat_id LIKE 'meta:999:%'")).rows[0].n);
 if (previos !== 0) { out(`ABORTADO: já existem ${previos} atendimentos de teste (meta:999:)`); process.exit(1); }
 

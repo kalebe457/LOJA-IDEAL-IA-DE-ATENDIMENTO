@@ -1,7 +1,9 @@
 // Passo 5c: assunção gravada no banco (segundo portão) + /ranking.
-// Servidor real + banco real (loja_ideal). Chats de teste "meta:999:<telefone fictício 55919000007xx>",
+// Servidor real + banco de testes (loja_ideal_teste). Chats de teste "meta:999:<telefone fictício 55919000007xx>",
 // wamids "teste-5c-...", vendedores com telegram_user_id na faixa FICTÍCIA 990000000001.. (limpeza-espelho.mts).
 // Claude, Meta e Telegram simulados (sem getUpdates, sem chamadas reais); rede externa bloqueada.
+// Banco de TESTES (loja_ideal_teste) fixado antes de qualquer import de src/; loja_ideal é dado real.
+const { exigirBancoDeTeste } = await import(new URL("./banco-teste.mts", import.meta.url).href);
 import { createHmac } from "node:crypto";
 
 Object.assign(process.env, {
@@ -74,6 +76,7 @@ for (const k of ["log", "warn", "error"] as const) console[k] = (...a: unknown[]
 
 const webhook = await import(B + "/src/webhook.ts");
 const banco = await import(B + "/src/banco.ts");
+await exigirBancoDeTeste(banco.consultar);
 webhook.iniciarWebhook();
 await new Promise((r) => setTimeout(r, 400));
 

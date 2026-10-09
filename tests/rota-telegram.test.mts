@@ -1,6 +1,8 @@
 // Rota POST /telegram/webhook no servidor REAL do projeto, numa porta própria.
 // Credenciais FALSAS definidas antes dos imports (o dotenv não sobrescreve).
 // Toda chamada de rede externa é bloqueada e contada: nada sai para o Telegram.
+// Banco de TESTES (loja_ideal_teste) fixado antes de qualquer import de src/; loja_ideal é dado real.
+await import(new URL("./banco-teste.mts", import.meta.url).href);
 Object.assign(process.env, {
   PORT: "39872",
   TELEGRAM_WEBHOOK_SECRET: "segredo-falso-rota_teste",

@@ -1,5 +1,7 @@
 // Passo 4: sem WHATSAPP_PROVIDER, o envio ao cliente sai SÓ pela Cloud API (Graph API simulada).
-// Servidor real + banco real (loja_ideal), IDs "teste-dedup-p4-".
+// Servidor real + banco de testes (loja_ideal_teste), IDs "teste-dedup-p4-".
+// Banco de TESTES (loja_ideal_teste) fixado antes de qualquer import de src/; loja_ideal é dado real.
+const { exigirBancoDeTeste } = await import(new URL("./banco-teste.mts", import.meta.url).href);
 import { createHmac } from "node:crypto";
 
 delete process.env.WHATSAPP_PROVIDER;
@@ -40,6 +42,7 @@ for (const k of ["log", "warn", "error"] as const) console[k] = () => {};
 
 const { iniciarWebhook } = await import(B + "/src/webhook.ts");
 const banco = await import(B + "/src/banco.ts");
+await exigirBancoDeTeste(banco.consultar);
 iniciarWebhook();
 await new Promise((r) => setTimeout(r, 400));
 

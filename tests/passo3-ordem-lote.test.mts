@@ -1,4 +1,6 @@
 // Passo 3: ordem das mensagens do MESMO POST da Meta. Servidor real + banco real, IDs "teste-dedup-".
+// Banco de TESTES (loja_ideal_teste) fixado antes de qualquer import de src/; loja_ideal é dado real.
+const { exigirBancoDeTeste } = await import(new URL("./banco-teste.mts", import.meta.url).href);
 import { createHmac } from "node:crypto";
 
 Object.assign(process.env, {
@@ -34,6 +36,7 @@ for (const n of ["log", "warn", "error"] as const) console[n] = () => {};
 
 const { iniciarWebhook } = await import(B + "/src/webhook.ts");
 const banco = await import(B + "/src/banco.ts");
+await exigirBancoDeTeste(banco.consultar);
 iniciarWebhook();
 await new Promise((r) => setTimeout(r, 400));
 

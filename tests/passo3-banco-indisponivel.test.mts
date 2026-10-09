@@ -1,5 +1,7 @@
 // Passo 3 — Caso 7: banco indisponível SIMULADO (pool deste processo aponta para porta inválida).
 // O PostgreSQL real não é desligado nem tocado.
+// Banco de TESTES (loja_ideal_teste) fixado antes de qualquer import de src/; loja_ideal é dado real.
+await import(new URL("./banco-teste.mts", import.meta.url).href);
 import { createHmac } from "node:crypto";
 
 Object.assign(process.env, {

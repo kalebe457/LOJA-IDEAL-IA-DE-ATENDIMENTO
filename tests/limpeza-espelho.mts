@@ -5,10 +5,21 @@
 // só os clientes e vendedores que ficaram sem nenhum atendimento. Vendedores criados pelos testes
 // do 5c usam telegram_user_id na faixa FICTÍCIA reservada abaixo. Sem TRUNCATE.
 // Ordem por causa das FKs (RESTRICT): mensagens → atendimentos → clientes/vendedores.
+// Só apaga no banco de TESTES: se o banco conectado não for loja_ideal_teste, lança sem apagar nada.
 
 type Consultar = (texto: string, parametros?: unknown[]) => Promise<{ rows: any[]; rowCount: number | null }>;
 
 export const PREFIXO_CHAT_TESTE = "meta:999:";
+
+const BANCO_TESTE = "loja_ideal_teste";
+
+async function exigirBancoDeTeste(consultar: Consultar): Promise<void> {
+  const atual = (await consultar("SELECT current_database() AS db")).rows[0]?.db;
+
+  if (atual !== BANCO_TESTE) {
+    throw new Error(`limpeza recusada: banco "${atual}" não é ${BANCO_TESTE}; nada foi apagado.`);
+  }
+}
 
 // Faixa de telegram_user_id dos vendedores de teste (fictícia).
 export const VENDEDOR_TESTE_MIN = 990_000_000_000;
@@ -22,6 +33,8 @@ export async function inicioDaExecucao(consultar: Consultar): Promise<Date> {
 }
 
 export async function limparVendedoresDeTeste(consultar: Consultar, ids: number[], desde: Date): Promise<number> {
+  await exigirBancoDeTeste(consultar);
+
   return (
     (
       await consultar(
@@ -37,6 +50,8 @@ export async function limparVendedoresDeTeste(consultar: Consultar, ids: number[
 export async function limparEspelhoDeTeste(
   consultar: Consultar,
 ): Promise<{ atendimentos: number; clientes: number; vendedores: number; restantes: number }> {
+  await exigirBancoDeTeste(consultar);
+
   const ids = (
     await consultar("SELECT DISTINCT cliente_id FROM atendimentos WHERE chat_id LIKE $1", [PREFIXO_CHAT_TESTE + "%"])
   ).rows.map((r) => r.cliente_id);

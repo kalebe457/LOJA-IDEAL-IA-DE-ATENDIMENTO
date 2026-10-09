@@ -1,3 +1,5 @@
+// Banco de TESTES (loja_ideal_teste) fixado antes de qualquer import de src/; loja_ideal é dado real.
+const { exigirBancoDeTeste } = await import(new URL("./banco-teste.mts", import.meta.url).href);
 import { createHmac } from "node:crypto";
 
 // Tudo falso e local: nenhuma chamada real a Meta, Telegram ou Anthropic.
@@ -53,6 +55,7 @@ let chamadasClaude = 0;
 const logReal = console.log;
 console.log = () => {};
 console.error = () => {};
+await exigirBancoDeTeste((await import(B + "/src/banco.ts")).consultar);
 const { iniciarWebhook } = await import(B + "/src/webhook.ts");
 iniciarWebhook();
 await new Promise((r) => setTimeout(r, 300));

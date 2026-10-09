@@ -9,6 +9,8 @@
 //   "@@CLAUDE <n>"       chamada ao Claude simulado (n = tamanho do histórico recebido)
 // Variáveis: PORT, TESTE_DESLOC_MS (relógio igual ao do pai), TESTE_BANCO_FORA=1 (conexões de
 // transação recusadas: a recuperação falha; a deduplicação continua funcionando).
+// Banco de TESTES (loja_ideal_teste) fixado antes de qualquer import de src/; loja_ideal é dado real.
+const { exigirBancoDeTeste } = await import(new URL("./banco-teste.mts", import.meta.url).href);
 
 Object.assign(process.env, {
   META_APP_SECRET: "meta-secret-teste",
@@ -69,5 +71,6 @@ if (process.env.TESTE_BANCO_FORA === "1") {
     a.length === 0 ? Promise.reject(Object.assign(new Error("conexão recusada (simulada)"), { code: "ECONNREFUSED" })) : (connectOriginal as any)(...a);
 }
 
+await exigirBancoDeTeste((await import(B + "/src/banco.ts")).consultar);
 const { iniciarWebhook } = await import(B + "/src/webhook.ts");
 await iniciarWebhook();

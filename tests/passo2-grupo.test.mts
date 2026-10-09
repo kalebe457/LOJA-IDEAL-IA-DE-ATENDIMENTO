@@ -1,4 +1,6 @@
 // Raiz do projeto, derivada deste arquivo (funciona em Windows e Linux).
+// Banco de TESTES (loja_ideal_teste) fixado antes de qualquer import de src/; loja_ideal é dado real.
+const { exigirBancoDeTeste } = await import(new URL("./banco-teste.mts", import.meta.url).href);
 const B = new URL("..", import.meta.url).href.replace(/\/$/, "");
 // Passo 2: autorização pelo grupo (getChatMember). Bot API SIMULADA; nada real é enviado.
 process.env.TELEGRAM_BOT_TOKEN = "123456:TOKEN-FALSO";
@@ -34,6 +36,7 @@ const statusPorUsuario = new Map<number, string>();
 const T = await import(B + "/src/telegramBot.ts");
 // Desde o 5d.1 o /start aceito grava em vendedores: marca o início para apagar só o que esta execução criou.
 const banco = await import(B + "/src/banco.ts");
+await exigirBancoDeTeste(banco.consultar);
 const limpeza = await import(B + "/tests/limpeza-espelho.mts");
 const inicio = await limpeza.inicioDaExecucao(banco.consultar);
 const logReal = console.log; const logs: string[] = [];
