@@ -92,7 +92,7 @@ export function descreverErro(erro: unknown): string {
  * Mascara um telefone (ou outro identificador numérico) para logs.
  *
  * Sempre 4 asteriscos, para não revelar o tamanho:
- * 559198274361 -> 5591****4361
+ * 5591900000000 -> 5591****0000
  */
 export function mascararTelefone(telefone: string): string {
   if (telefone.length <= 8) {
@@ -105,7 +105,7 @@ export function mascararTelefone(telefone: string): string {
 /**
  * Mascara números longos dentro de um chatId para logs.
  *
- * meta:<id>:559198274361 -> meta:<id mascarado>:5591****4361
+ * meta:<id>:5591900000000 -> meta:<id mascarado>:5591****0000
  */
 export function mascararChatId(chatId: string): string {
   return chatId.replace(/\d{8,}/g, (digitos) => mascararTelefone(digitos));

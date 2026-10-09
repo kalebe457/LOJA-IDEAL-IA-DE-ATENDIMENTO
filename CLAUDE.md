@@ -9,6 +9,10 @@ vendedores no Telegram → vendedor assume e continua a venda pelo WhatsApp dele
   (nome em minúsculas). Rotas: `GET/POST /meta/webhook`, `POST /telegram/webhook`, `GET /health`.
 - **WhatsApp: só Meta Cloud API.** OpenWA foi removido; não existe `WHATSAPP_PROVIDER` nem
   fallback. Envio em `metaEnvio.ts`; `META_ENVIO_ATIVO=false` = só log, o fluxo segue normal.
+- **Resposta que não chega** (falha depois do retry, inclusive incerta): o atendimento vai para
+  HUMANO e o resumo sai no grupo com o aviso ⚠️ (um por atendimento). 3 falhas seguidas em 10 min
+  ou erro 190 → alerta no privado dos admins do grupo com `/start` (`alertaEnvio.ts`, no máximo 1 a
+  cada 30 min; "voltaram ao normal" no 1º envio aceito). No grupo o telefone sai só mascarado.
 - **Telegram: canal dos vendedores.** Resumo no grupo + botão ASSUMIR. Quem pode ser vendedor
   é decidido por `getChatMember` no grupo (member/administrator/creator), no `/start` e a cada
   clique, antes do lock. Sem lista de vendedores no `.env`. Assunção: lock em memória →

@@ -90,7 +90,11 @@ export type ResultadoEnvioMeta =
     }
   | {
       aceito: false;
-      motivo: "configuracao" | "tamanho" | "permanente" | "anomalia" | "esgotado";
+      /*
+       * token: META_ACCESS_TOKEN ausente ou erro 190 da Graph
+       * (token expirado ou inválido).
+       */
+      motivo: "configuracao" | "token" | "tamanho" | "permanente" | "anomalia" | "esgotado";
     };
 
 /*
@@ -117,6 +121,11 @@ type ResultadoTentativa = {
    * A Meta indicou que não adianta repetir agora.
    */
   desistir?: boolean;
+
+  /*
+   * Código de erro da Graph (ex.: 190), quando houver.
+   */
+  codigo?: number;
 };
 
 /**
@@ -520,6 +529,10 @@ async function tentarEnvio(
 
   const resultado: ResultadoTentativa = { classe };
 
+  if (typeof erroGraph.code === "number") {
+    resultado.codigo = erroGraph.code;
+  }
+
   const retryAfterMs = lerRetryAfterMs(resposta.headers.get("retry-after"));
 
   if (retryAfterMs !== null) {
@@ -575,7 +588,7 @@ export async function enviarTextoMeta(
       `[Meta envio] bloqueado: ${faltando.join(", ")} não configurado.`,
     );
 
-    return { aceito: false, motivo: "configuracao" };
+    return { aceito: false, motivo: token ? "configuracao" : "token" };
   }
 
   const destino = lerChatIdMeta(chatId);
@@ -642,7 +655,7 @@ export async function enviarTextoMeta(
     }
 
     if (resultado.classe === "permanente") {
-      return { aceito: false, motivo: "permanente" };
+      return { aceito: false, motivo: resultado.codigo === 190 ? "token" : "permanente" };
     }
 
     if (resultado.classe === "incerto") {

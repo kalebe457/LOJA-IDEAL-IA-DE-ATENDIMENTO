@@ -42,6 +42,7 @@ if (preparo.status !== 0) {
 const SUITES = [
   "banco-teste-protecao.test.mts",
   "logs-sem-dados-pessoais.test.mts",
+  "aviso-falha-envio.test.mts",
   "passo4-somente-log.test.mts",
   "passo4-meta-envio.test.mts",
   "telegram-e2e.test.mts",

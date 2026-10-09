@@ -65,6 +65,12 @@ const MENSAGEM_RANKING_VAZIO = "Nenhum atendimento assumido ainda.";
 const MENSAGEM_RANKING_ERRO = "Não consegui consultar agora. Tente de novo em instantes.";
 
 /*
+ * Topo do resumo quando a IA não conseguiu responder o cliente.
+ */
+const AVISO_FALHA_ENVIO =
+  "⚠️ A IA não conseguiu responder este cliente. Assuma e fale com ele pelo WhatsApp.";
+
+/*
  * Tempo máximo da consulta ao grupo: uma API lenta não
  * pode deixar o /start ou o callback presos.
  */
@@ -175,6 +181,12 @@ type AtendimentoTelegram = {
   resumo: ResumoCliente;
 
   envioResumo: "enviando" | "enviado" | "falhou";
+
+  /*
+   * O resumo sai com o aviso de que a IA não conseguiu
+   * responder o cliente (vale também para os reenvios).
+   */
+  avisoFalhaEnvio: boolean;
 
   /*
    * message_id do resumo no grupo. Só cliques
@@ -323,6 +335,7 @@ export function restaurarEstadoTelegram(dados: {
       chatIdCliente: r.chatId,
       resumo: resumoRecuperado(r),
       envioResumo: "enviado",
+      avisoFalhaEnvio: false,
       mensagemGrupoId: r.telegramMessageId,
       vendedorId: r.vendedorUserId,
       vendedorNome: r.vendedorNome,
@@ -443,12 +456,23 @@ export function gerarLinkWhatsApp(telefone: string): string | null {
   return `https://wa.me/${digitos}`;
 }
 
-function formatarResumoGrupo(resumo: ResumoCliente): string {
+/*
+ * Telefone no GRUPO só mascarado: o completo (e o wa.me) vai
+ * só na DM de quem assumir.
+ */
+function telefoneParaGrupo(telefone: string): string {
+  const digitos = telefone.replace(/\D/g, "");
+
+  return digitos.length >= 10 ? mascararTelefone(digitos) : "Não informado";
+}
+
+function formatarResumoGrupo(resumo: ResumoCliente, avisoFalhaEnvio = false): string {
   return [
+    ...(avisoFalhaEnvio ? [AVISO_FALHA_ENVIO, ""] : []),
     "📋 NOVO ATENDIMENTO",
     "",
     `Nome: ${resumo.nome}`,
-    `Telefone: ${resumo.telefone}`,
+    `Telefone: ${telefoneParaGrupo(resumo.telefone)}`,
     `Produto: ${resumo.produto}`,
     `Quantidade: ${resumo.quantidade}`,
     `Observações: ${resumo.observacoes}`,
@@ -552,6 +576,7 @@ export async function enviarResumoTelegram(
   atendimentoId: string,
   chatIdCliente: string,
   resumo: ResumoCliente,
+  opcoes: { avisoFalhaEnvio?: boolean } = {},
 ): Promise<boolean> {
   if (!telegramConfigurado()) {
     console.error(
@@ -562,6 +587,10 @@ export async function enviarResumoTelegram(
   }
 
   const existente = atendimentos.get(atendimentoId);
+
+  if (existente && opcoes.avisoFalhaEnvio) {
+    existente.avisoFalhaEnvio = true;
+  }
 
   if (existente && existente.envioResumo !== "falhou") {
     console.log(
@@ -578,6 +607,7 @@ export async function enviarResumoTelegram(
     chatIdCliente,
     resumo: { ...resumo },
     envioResumo: "enviando",
+    avisoFalhaEnvio: opcoes.avisoFalhaEnvio === true,
     mensagemGrupoId: null,
     vendedorId: null,
     vendedorNome: null,
@@ -598,7 +628,7 @@ export async function enviarResumoTelegram(
   const resposta = await chamarTelegram<TelegramMensagem>("sendMessage", {
     chat_id: config().chatId,
 
-    text: formatarResumoGrupo(atd.resumo),
+    text: formatarResumoGrupo(atd.resumo, atd.avisoFalhaEnvio),
 
     reply_markup: {
       inline_keyboard: [
@@ -638,6 +668,76 @@ export async function enviarResumoTelegram(
   );
 
   return false;
+}
+
+/**
+ * Situação do resumo de um atendimento no grupo.
+ */
+export function situacaoResumoTelegram(
+  atendimentoId: string,
+): "nenhum" | "enviando" | "enviado" | "falhou" {
+  return atendimentos.get(atendimentoId)?.envioResumo ?? "nenhum";
+}
+
+/**
+ * Manda um texto no PRIVADO de cada administrador/criador do grupo
+ * de vendedores (getChatAdministrators, sem bots) que esteja
+ * registrado (/start). Nunca manda para o grupo.
+ *
+ * Devolve quantos receberam. Telegram fora ou nenhum administrador
+ * alcançável: só log.
+ */
+export async function avisarAdministradores(texto: string): Promise<number> {
+  if (!telegramConfigurado()) {
+    console.error("[Alerta] ATENÇÃO: Telegram não configurado; alerta aos administradores não enviado.");
+
+    return 0;
+  }
+
+  const resposta = await chamarTelegram<{ status?: unknown; user?: TelegramUsuario }[]>(
+    "getChatAdministrators",
+    { chat_id: config().chatId },
+    TIMEOUT_GET_CHAT_MEMBER_MS,
+  );
+
+  if (!resposta.ok || !Array.isArray(resposta.result)) {
+    console.error("[Alerta] ATENÇÃO: administradores do grupo não consultados; alerta não enviado.");
+
+    return 0;
+  }
+
+  const administradores = resposta.result.filter(
+    (membro) =>
+      (membro.status === "administrator" || membro.status === "creator") &&
+      membro.user !== undefined &&
+      membro.user.is_bot !== true,
+  );
+
+  let enviados = 0;
+
+  for (const membro of administradores) {
+    const vendedor = vendedores.get(normalizarIdTelegram(membro.user?.id));
+
+    if (!vendedor) {
+      continue;
+    }
+
+    const envio = await chamarTelegram("sendMessage", { chat_id: vendedor.chatPrivadoId, text: texto });
+
+    if (envio.ok) {
+      enviados++;
+    }
+  }
+
+  if (enviados === 0) {
+    console.error(
+      `[Alerta] ATENÇÃO: nenhum administrador alcançável (${administradores.length} administrador(es) no grupo; nenhum registrado pelo /start ou a DM falhou).`,
+    );
+  } else {
+    console.log(`[Alerta] enviado a ${enviados} de ${administradores.length} administrador(es).`);
+  }
+
+  return enviados;
 }
 
 /**

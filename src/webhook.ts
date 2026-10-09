@@ -12,6 +12,12 @@ import { IAClaude } from "./iaClaude.js";
 
 import { descreverErro, mascararChatId, valorSeguro, wamidSeguro } from "./logSeguro.js";
 
+import {
+  motivoDaFalhaEnvio,
+  registrarEnvioAceito,
+  registrarFalhaEnvio,
+} from "./alertaEnvio.js";
+
 import type { IA } from "./ia.js";
 
 import {
@@ -31,6 +37,7 @@ import {
   mascararTelefone,
   metaEnvioAtivo,
   obterChatIdPorWamid,
+  type ResultadoEnvioMeta,
 } from "./metaEnvio.js";
 
 import {
@@ -49,6 +56,7 @@ import {
   reenviarResumosTelegramPendentes,
   restaurarEstadoTelegram,
   segredoWebhookTelegramValido,
+  situacaoResumoTelegram,
   telegramConfigurado,
   type TelegramUpdate,
 } from "./telegramBot.js";
@@ -141,6 +149,12 @@ type Conversa = {
    * (mantém ENTRADA/SAIDA em ordem estrita no banco).
    */
   ultimoInstanteEspelho: number;
+
+  /*
+   * O grupo já foi avisado de que uma resposta não chegou
+   * a este cliente? (No máximo um aviso por atendimento.)
+   */
+  avisoFalhaEnvio: boolean;
 };
 
 /*
@@ -259,10 +273,10 @@ function lerCorpo(request: IncomingMessage): Promise<Buffer> {
  * Normaliza telefone.
  *
  * Exemplo:
- * +55 (91) 98274-8787
+ * +55 (91) 90000-0000
  *
  * vira:
- * 559198274787
+ * 5591900000000
  */
 function normalizarTelefone(telefone?: string): string {
   if (typeof telefone !== "string" || telefone.trim() === "") {
@@ -386,19 +400,19 @@ function conversaEstaInativa(conversa: Conversa, agora = Date.now()): boolean {
  *
  * META_ENVIO_ATIVO decide entre somente log e envio real.
  *
- * wamid no retorno = aceito pela Graph API, NÃO é
- * confirmação de entrega. null = não enviado.
+ * aceito = aceito pela Graph API, NÃO é confirmação de
+ * entrega. null = não enviado DE PROPÓSITO (modo somente log).
  */
 async function enviarAoCliente(
   chatId: string,
   texto: string,
-): Promise<string | null> {
+): Promise<ResultadoEnvioMeta | null> {
   if (!ehChatMeta(chatId)) {
     console.error(
       `Envio recusado: ${mascararChatId(chatId)} não é uma conversa da Meta.`,
     );
 
-    return null;
+    return { aceito: false, motivo: "configuracao" };
   }
 
   if (!metaEnvioAtivo()) {
@@ -409,9 +423,19 @@ async function enviarAoCliente(
     return null;
   }
 
-  const resultado = await enviarTextoMeta(chatId, texto);
+  return enviarTextoMeta(chatId, texto);
+}
 
-  return resultado.aceito ? resultado.wamid : null;
+/**
+ * Conta o resultado de um envio real para o alerta geral
+ * (falhas seguidas e "voltou ao normal"). Não espera o Telegram.
+ */
+function contarResultadoEnvio(envio: ResultadoEnvioMeta): void {
+  if (envio.aceito) {
+    void registrarEnvioAceito();
+  } else {
+    void registrarFalhaEnvio(motivoDaFalhaEnvio(envio.motivo));
+  }
 }
 
 /**
@@ -464,6 +488,8 @@ function criarNovaConversa(senderPhone?: string): Conversa {
     ultimaMensagemEm: agora,
 
     ultimoInstanteEspelho: 0,
+
+    avisoFalhaEnvio: false,
   };
 
   console.log("Nova conversa criada");
@@ -561,7 +587,16 @@ async function avisarLojaFechada(chatId: string): Promise<void> {
    */
   const modoSomenteLog = !metaEnvioAtivo();
 
-  const enviado = (await enviarAoCliente(chatId, MENSAGEM_LOJA_FECHADA)) !== null;
+  const envio = await enviarAoCliente(chatId, MENSAGEM_LOJA_FECHADA);
+
+  const enviado = envio?.aceito === true;
+
+  /*
+   * Sem atendimento: a falha só conta para o alerta geral.
+   */
+  if (envio) {
+    contarResultadoEnvio(envio);
+  }
 
   if (enviado || modoSomenteLog) {
     avisosLojaFechada.set(chatId, periodo);
@@ -739,6 +774,12 @@ async function processarMensagemRecebida(payload: EventoMensagem): Promise<void>
      */
     let saida: MensagemEspelho | null = null;
 
+    /*
+     * A resposta não chegou ao cliente: o grupo recebe o resumo
+     * com o aviso (decidido dentro do try, publicado depois).
+     */
+    let avisarFalhaNoGrupo = false;
+
     let resultado: ResultadoIA;
 
     try {
@@ -866,9 +907,17 @@ async function processarMensagemRecebida(payload: EventoMensagem): Promise<void>
         /*
          * Envia a resposta ao cliente (tentativa real).
          */
-        wamidResposta = await enviarAoCliente(chatId, resultado.resposta);
+        const envio = await enviarAoCliente(chatId, resultado.resposta);
 
-        clienteAvisado = wamidResposta !== null;
+        if (envio) {
+          contarResultadoEnvio(envio);
+
+          if (envio.aceito) {
+            wamidResposta = envio.wamid;
+
+            clienteAvisado = true;
+          }
+        }
       }
 
       if (clienteAvisado) {
@@ -894,8 +943,21 @@ async function processarMensagemRecebida(payload: EventoMensagem): Promise<void>
           conversa.ia.desfazerRespostaNaoEntregue();
 
           console.log(
-            `Atendimento ${conversa.atendimentoId}: resposta não entregue desfeita; a pergunta será feita novamente.`,
+            `Atendimento ${conversa.atendimentoId}: resposta não entregue desfeita.`,
           );
+        }
+
+        /*
+         * A IA para de responder este cliente (HUMANO) e o grupo
+         * recebe o resumo com o aviso, para um vendedor assumir e
+         * falar com ele pelo WhatsApp. Um aviso por atendimento.
+         */
+        conversa.cliente.status = "HUMANO";
+
+        if (!conversa.avisoFalhaEnvio) {
+          conversa.avisoFalhaEnvio = true;
+
+          avisarFalhaNoGrupo = true;
         }
       }
 
@@ -919,12 +981,28 @@ async function processarMensagemRecebida(payload: EventoMensagem): Promise<void>
      * SOMENTE para o grupo de vendedores no Telegram
      * (idempotente por atendimento).
      */
-    if (resultado.status === "HUMANO") {
-      if (telegramConfigurado()) {
+    if (resultado.status === "HUMANO" || avisarFalhaNoGrupo) {
+      if (!telegramConfigurado()) {
+        if (avisarFalhaNoGrupo) {
+          console.error(
+            `Atendimento ${conversa.atendimentoId}: resposta não entregue e Telegram não configurado; grupo não avisado.`,
+          );
+        }
+      } else if (avisarFalhaNoGrupo && situacaoResumoTelegram(conversa.atendimentoId) === "enviado") {
+        /*
+         * Hoje não acontece: depois do resumo a IA não envia mais
+         * nada ao cliente. (O aviso por reply ao resumo não foi
+         * implementado.)
+         */
+        console.error(
+          `Atendimento ${conversa.atendimentoId}: resposta não entregue depois do resumo publicado; grupo não avisado.`,
+        );
+      } else {
         await enviarResumoTelegram(
           conversa.atendimentoId,
           chatId,
           conversa.cliente.resumo,
+          { avisoFalhaEnvio: avisarFalhaNoGrupo },
         );
       }
 
@@ -1170,6 +1248,7 @@ function montarConversaRecuperada(c: ConversaRecuperada): Conversa {
     vendedorAssumiu: c.assumida,
     ultimaMensagemEm: c.ultimaAtividadeEm,
     ultimoInstanteEspelho: c.ultimaMensagemEm,
+    avisoFalhaEnvio: false,
   };
 }
 

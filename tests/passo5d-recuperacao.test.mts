@@ -180,10 +180,12 @@ qtdAplicavel = true;
 const memAntes1 = JSON.stringify(webhook.lerEstadoEspelhavel(chat(TEL(1))));
 const cod1 = webhook.lerEstadoEspelhavel(chat(TEL(1)))!.codigo;
 await comparar(TEL(1), "antes do reinício (triagem no meio)");
-// (2) apresentação pendente: a 1ª resposta não foi entregue.
-graphAceita = false;
+// (2) apresentação pendente, ainda em triagem (IA). Uma resposta não entregue hoje leva o
+// atendimento para HUMANO (aviso de falha de envio), então o estado é montado no banco: o que se
+// testa aqui é a coluna voltar na partida.
 await mensagem(TEL(2), "oi");
-graphAceita = true;
+await banco.consultar("UPDATE atendimentos SET apresentacao_pendente = TRUE, etapa_atual = NULL, perguntas_etapa = 0 WHERE codigo = $1",
+  [webhook.lerEstadoEspelhavel(chat(TEL(2)))!.codigo]);
 // (4) inativo: aberto, mas com a última atividade há 25 min.
 await mensagem(TEL(4), "oi");
 const cod4 = webhook.lerEstadoEspelhavel(chat(TEL(4)))!.codigo;
@@ -242,7 +244,7 @@ out("\n== (2) Apresentação pendente ==");
 ok(webhook.lerEstadoEspelhavel(chat(TEL(2)))?.triagem.apresentacaoPendente === true, "continua pendente depois do reinício");
 await mensagem(TEL(2), "oi de novo");
 const cod2 = webhook.lerEstadoEspelhavel(chat(TEL(2)))!.codigo;
-ok((await saidas(cod2))[0]?.startsWith("Olá!") === true, "a próxima resposta traz a apresentação");
+ok((await saidas(cod2)).at(-1)?.startsWith("Olá!") === true, "a próxima resposta traz a apresentação");
 
 out("\n== (4) Inativo ==");
 const a4 = await atendimento(cod4);

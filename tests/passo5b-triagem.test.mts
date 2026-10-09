@@ -185,26 +185,29 @@ ok(b.status === "HUMANO" && b.etapa_atual === null && b.perguntas_etapa === 0 &&
    b.nome === null && b.produto === "telha" && b.quantidade === null && b.observacoes === null,
   "banco: observações pulada pelo limite; triagem concluída (HUMANO), campos não informados = NULL");
 
-out("\n== 3. Envio recusado pela Meta → nem memória nem banco avançam ==");
+// Desde o aviso de falha de envio (Bloco 2): a resposta que não chega passa o atendimento para
+// HUMANO (o grupo recebe o resumo com o aviso; ver aviso-falha-envio.test.mts). O que não chegou
+// continua desfeito na memória e no banco.
+out("\n== 3. Envio recusado pela Meta → nada avança; o atendimento vai para HUMANO ==");
 graphAceita = false;
 await mensagem(TEL_C, "oi");
-let c = (await atendimento(TEL_C))!;
-let mc = await mensagens(TEL_C);
-ok(c.etapa_atual === null && c.perguntas_etapa === 0 && c.apresentacao_pendente && direcoes(mc) === "E",
-  "1ª resposta recusada: sem etapa, 0 perguntas, apresentação pendente, só a ENTRADA");
-await comparar(TEL_C, "depois da recusa da 1ª resposta");
 graphAceita = true;
+let c = (await atendimento(TEL_C))!;
+ok(c.etapa_atual === null && c.perguntas_etapa === 0 && c.apresentacao_pendente && c.status === "HUMANO" && direcoes(await mensagens(TEL_C)) === "E",
+  "1ª resposta recusada: sem etapa, 0 perguntas, apresentação pendente, só a ENTRADA; status HUMANO");
+await comparar(TEL_C, "depois da recusa da 1ª resposta");
 await mensagem(TEL_C, "oi de novo");
 c = (await atendimento(TEL_C))!;
-ok(c.etapa_atual === "nome" && c.perguntas_etapa === 1 && !c.apresentacao_pendente && direcoes(await mensagens(TEL_C)) === "EES", "Meta volta a aceitar: nome perguntado, SAIDA gravada");
+ok(c.status === "HUMANO" && direcoes(await mensagens(TEL_C)) === "EE", "mensagem seguinte: a IA não responde mais esse cliente (só ENTRADA)");
+const TEL_C2 = "5591900000612";
+await mensagem(TEL_C2, "oi");
 graphAceita = false;
-await mensagem(TEL_C, "Bia");
-c = (await atendimento(TEL_C))!;
-mc = await mensagens(TEL_C);
-ok(c.nome === "Bia" && c.etapa_atual === null && c.perguntas_etapa === 0 && direcoes(mc) === "EESE",
-  "pergunta do produto recusada: nome mantido, produto não ficou perguntado, sem SAIDA nova");
-await comparar(TEL_C, "depois da recusa da pergunta do produto");
+await mensagem(TEL_C2, "Bia");
 graphAceita = true;
+const c2 = (await atendimento(TEL_C2))!;
+ok(c2.nome === "Bia" && c2.etapa_atual === null && c2.perguntas_etapa === 0 && c2.status === "HUMANO" && direcoes(await mensagens(TEL_C2)) === "ESE",
+  "pergunta do produto recusada: nome mantido, produto não ficou perguntado, sem SAIDA nova; HUMANO");
+await comparar(TEL_C2, "depois da recusa da pergunta do produto");
 
 out("\n== 4. META_ENVIO_ATIVO=false → triagem avança e as SAIDAs são gravadas ==");
 process.env.META_ENVIO_ATIVO = "false";

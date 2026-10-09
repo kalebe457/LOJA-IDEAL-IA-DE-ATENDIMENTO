@@ -25,7 +25,8 @@ const GRUPO = -1009999999999;
 // ---- Canários (fictícios e únicos) ----
 const MARCA = "CANARIO-7Q3";
 const NOME_CLIENTE = "Zebedeu";
-const TEL = { triagem: "5591966613579", fechada: "5591966624680", recusa: "5591966635791", claude: "5591966646802", banco: "5591966657913", dm: "5591966668024" };
+const TEL = { triagem: "5591966613579", fechada: "5591966624680", recusa: "5591966635791", claude: "5591966646802", banco: "5591966657913", dm: "5591966668024",
+  recusa2: "5591966679135", recusa3: "5591966680246", sucesso: "5591966602468", fechadaFalha: "5591966691357" };
 const VEND = { id: 990_000_000_777, nome: "Vendedor CANARIOVEND" };
 const ADMIN = { id: 990_000_000_778, nome: "Admin CANARIOADM" };
 const MEMBRO = { id: 990_000_000_779, nome: "Membro CANARIOMEM" };
@@ -76,6 +77,9 @@ const fetchReal = globalThis.fetch;
     const corpo = JSON.parse(init.body);
     telegram.push({ metodo: m[1]!, corpo });
     const r = (o: any) => ({ status: o.ok ? 200 : 400, json: async () => o });
+    if (m[1] === "getChatAdministrators") {
+      return r({ ok: true, result: [{ status: "administrator", user: { id: ADMIN.id, is_bot: false, first_name: ADMIN.nome } }] });
+    }
     if (m[1] === "getChatMember") {
       const s = statusPorUsuario.get(corpo.user_id) ?? "member";
       if (s === "REDE") throw Object.assign(new Error(`connect ECONNRESET ${MARCA} ${REDE.nome}`), { cause: { code: "ECONNRESET" } });
@@ -111,6 +115,7 @@ const webhook = await import(B + "/src/webhook.ts");
 const banco = await import(B + "/src/banco.ts");
 await exigirBancoDeTeste(banco.consultar);
 const T = await import(B + "/src/telegramBot.ts");
+const alerta = await import(B + "/src/alertaEnvio.ts");
 await webhook.iniciarWebhook();
 
 const espera = (ms = 600) => new Promise((r) => setTimeout(r, ms));
@@ -179,6 +184,29 @@ modoGraph = "recusa-eco";
 await mensagem(TEL.recusa, `oi ${MARCA}`);
 modoGraph = "aceita";
 ok(tudo().includes("HTTP 400 | code: 100 | subcode: - | type: - | fbtrace_id: -"), "Meta recusando (corpo de erro com eco): só campos técnicos saneados");
+
+// 6b. Aviso de falha de envio: mais 2 falhas (3 seguidas) → alerta aos admins; depois um envio
+//     aceito → "voltaram ao normal"; e o aviso de loja fechada falhando (conta para o alerta).
+await privado(ADMIN, "/start");
+modoGraph = "recusa-eco";
+await mensagem(TEL.recusa2, `oi ${MARCA}`);
+await mensagem(TEL.recusa3, `oi ${MARCA}`);
+await alerta.aguardarAlertasParaTestes();
+modoGraph = "aceita";
+await mensagem(TEL.sucesso, `oi ${MARCA}`);
+await alerta.aguardarAlertasParaTestes();
+desloc += 12 * 60 * 60_000;
+modoGraph = "recusa-eco";
+await mensagem(TEL.fechadaFalha, `oi ${MARCA}`);
+modoGraph = "aceita";
+desloc -= 12 * 60 * 60_000;
+await alerta.aguardarAlertasParaTestes();
+const resumoAviso = resumoDo(codigoDe(TEL.recusa2));
+ok(String(resumoAviso?.corpo.text ?? "").startsWith("⚠️ A IA não conseguiu responder") &&
+   telegram.some((c) => c.metodo === "sendMessage" && c.corpo.chat_id === ADMIN.id && String(c.corpo.text).startsWith("⚠️ A IA não está conseguindo")) &&
+   telegram.some((c) => c.metodo === "sendMessage" && c.corpo.chat_id === ADMIN.id && String(c.corpo.text).startsWith("✅ Os envios")) &&
+   tudo().includes("[Alerta] ATENÇÃO: alerta geral de envio") && tudo().includes("Loja fechada: aviso não entregue"),
+  "aviso no grupo, alerta geral aos admins, \"voltaram ao normal\" e loja fechada falhando");
 
 // 7. Claude lançando erro com o texto na mensagem.
 claudeFalha = true;
