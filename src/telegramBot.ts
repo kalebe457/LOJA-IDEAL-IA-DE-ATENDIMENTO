@@ -22,6 +22,15 @@ import type {
 
 import type { ResumoCliente } from "./tipos.js";
 
+import {
+  adicionarDiaFechado,
+  dataLocal,
+  listarDiasFechados,
+  removerDiaFechado,
+} from "./horarioFuncionamento.js";
+
+import { apagarFechamento, gravarFechamento } from "./persistenciaFechamentos.js";
+
 /*
  * Integração dos vendedores pelo Telegram.
  *
@@ -41,6 +50,7 @@ import type { ResumoCliente } from "./tipos.js";
  *
  * /ranking (só no privado, só administradores do grupo):
  * atendimentos assumidos por vendedor, no mês e no total.
+ * /fechar, /abrir e /fechamentos (idem): fechamento manual da loja.
  */
 
 const TELEGRAM_API = "https://api.telegram.org";
@@ -58,7 +68,7 @@ const MENSAGEM_FORA_DA_EQUIPE =
 const MENSAGEM_VERIFICACAO_FALHOU =
   "Não consegui verificar sua participação na equipe agora. Tente novamente em instantes.";
 
-const MENSAGEM_RANKING_SO_ADMIN = "Esse comando é só para administradores do grupo.";
+const MENSAGEM_SO_ADMIN = "Esse comando é só para administradores do grupo.";
 
 const MENSAGEM_RANKING_VAZIO = "Nenhum atendimento assumido ainda.";
 
@@ -1233,6 +1243,170 @@ async function processarCallback(callback: TelegramCallbackQuery): Promise<void>
  * /ranking no privado: só administradores do grupo.
  * Só nomes de vendedores e números (sem cliente, sem codigo).
  */
+/**
+ * Só administrador/criador do grupo de vendedores (getChatMember, sem
+ * cache). Responde a negação ou o erro técnico e devolve false.
+ */
+async function verificarAdministrador(
+  usuario: TelegramUsuario,
+  responder: (texto: string) => Promise<unknown>,
+  comando: string,
+): Promise<boolean> {
+  const status = await statusNoGrupo(usuario.id);
+
+  if (status === null) {
+    await responder(MENSAGEM_VERIFICACAO_FALHOU);
+
+    return false;
+  }
+
+  if (!STATUS_ADMINISTRADORES.has(status)) {
+    console.log(`[Telegram] ${comando} negado (user_id ${mascararIdTelegram(usuario.id)}, status: ${status}).`);
+
+    await responder(MENSAGEM_SO_ADMIN);
+
+    return false;
+  }
+
+  return true;
+}
+
+const DIAS_DA_SEMANA = ["domingo", "segunda", "terça", "quarta", "quinta", "sexta", "sábado"];
+
+const doisDigitos = (n: number) => String(n).padStart(2, "0");
+
+/**
+ * "AAAA-MM-DD" → "sexta, 25/12" (com "/AAAA" se não for o ano atual).
+ */
+function descreverDia(data: string, anoAtual: string): string {
+  const [ano = "", mes = "", dia = ""] = data.split("-");
+
+  const semana = DIAS_DA_SEMANA[new Date(Date.UTC(Number(ano), Number(mes) - 1, Number(dia))).getUTCDay()];
+
+  return `${semana}, ${dia}/${mes}${ano === anoAtual ? "" : `/${ano}`}`;
+}
+
+/**
+ * Argumento do /fechar e do /abrir → "AAAA-MM-DD".
+ *
+ * Vazio = hoje. "DD/MM" = essa data no ano atual; se já passou neste
+ * ano, no próximo. Data inexistente (31/02, 00/13) ou texto: null.
+ */
+function interpretarDia(argumento: string, hoje: string): string | null {
+  if (argumento === "") {
+    return hoje;
+  }
+
+  const partes = /^(\d{1,2})\/(\d{1,2})$/.exec(argumento);
+
+  if (!partes) {
+    return null;
+  }
+
+  const dia = Number(partes[1]);
+
+  const mes = Number(partes[2]);
+
+  const anoHoje = Number(hoje.slice(0, 4));
+
+  for (const ano of [anoHoje, anoHoje + 1]) {
+    const d = new Date(Date.UTC(ano, mes - 1, dia));
+
+    const existe = d.getUTCFullYear() === ano && d.getUTCMonth() === mes - 1 && d.getUTCDate() === dia;
+
+    const data = `${ano}-${doisDigitos(mes)}-${doisDigitos(dia)}`;
+
+    if (existe && data >= hoje) {
+      return data;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * /fechar [DD/MM], /abrir [DD/MM] e /fechamentos, no privado, só para
+ * administradores do grupo. O fechamento vale o dia inteiro (Belém).
+ */
+async function processarFechamentoPrivado(
+  mensagem: TelegramMensagem,
+  comando: "fechar" | "abrir" | "fechamentos",
+  argumento: string,
+): Promise<void> {
+  const usuario = mensagem.from;
+
+  if (!usuario || usuario.is_bot) {
+    return;
+  }
+
+  const responder = (texto: string) =>
+    chamarTelegram("sendMessage", { chat_id: mensagem.chat.id, text: texto });
+
+  if (!(await verificarAdministrador(usuario, responder, `/${comando}`))) {
+    return;
+  }
+
+  const hoje = dataLocal();
+
+  const anoAtual = hoje.slice(0, 4);
+
+  if (comando === "fechamentos") {
+    const lista = listarDiasFechados(hoje);
+
+    await responder(
+      lista.length === 0
+        ? "Nenhum fechamento marcado de hoje em diante."
+        : ["Fechamentos marcados (a loja não atende o dia inteiro):", ...lista.map((d) => `• ${descreverDia(d, anoAtual)}`)].join("\n"),
+    );
+
+    console.log(`[Loja] /fechamentos respondido (${lista.length})`);
+
+    return;
+  }
+
+  const data = interpretarDia(argumento, hoje);
+
+  if (data === null) {
+    await responder(`Data inválida. Use /${comando} DD/MM (ex.: /${comando} 25/12) ou só /${comando} para hoje.`);
+
+    return;
+  }
+
+  const extenso = descreverDia(data, anoAtual);
+
+  const ddmm = `${data.slice(8, 10)}/${data.slice(5, 7)}`;
+
+  const admin = mascararIdTelegram(usuario.id);
+
+  if (comando === "fechar") {
+    const novo = adicionarDiaFechado(data);
+
+    const gravado = await gravarFechamento(data, String(usuario.id));
+
+    console.log(`[Loja] fechamento manual em ${ddmm} por admin ${admin}`);
+
+    await responder(
+      `${novo ? "Loja marcada como fechada" : "A loja já estava marcada como fechada"} em ${extenso}. Quem mandar mensagem recebe o aviso de loja fechada.` +
+        (gravado ? "" : " (Não consegui gravar no banco: vale até o próximo reinício.)"),
+    );
+
+    return;
+  }
+
+  const existia = removerDiaFechado(data);
+
+  const removido = await apagarFechamento(data);
+
+  if (existia) {
+    console.log(`[Loja] fechamento de ${ddmm} removido por admin ${admin}`);
+  }
+
+  await responder(
+    (existia ? `Fechamento de ${extenso} removido. A loja segue o horário normal nesse dia.` : `Não havia fechamento marcado em ${extenso}.`) +
+      (removido ? "" : " (Não consegui remover do banco: o fechamento pode voltar no próximo reinício.)"),
+  );
+}
+
 async function processarRankingPrivado(mensagem: TelegramMensagem): Promise<void> {
   const usuario = mensagem.from;
 
@@ -1243,19 +1417,7 @@ async function processarRankingPrivado(mensagem: TelegramMensagem): Promise<void
   const responder = (texto: string) =>
     chamarTelegram("sendMessage", { chat_id: mensagem.chat.id, text: texto });
 
-  const status = await statusNoGrupo(usuario.id);
-
-  if (status === null) {
-    await responder(MENSAGEM_VERIFICACAO_FALHOU);
-
-    return;
-  }
-
-  if (!STATUS_ADMINISTRADORES.has(status)) {
-    console.log(`[Telegram] /ranking negado (user_id ${mascararIdTelegram(usuario.id)}, status: ${status}).`);
-
-    await responder(MENSAGEM_RANKING_SO_ADMIN);
-
+  if (!(await verificarAdministrador(usuario, responder, "/ranking"))) {
     return;
   }
 
@@ -1333,5 +1495,20 @@ export async function processarUpdateTelegram(update: TelegramUpdate): Promise<v
     /^\/ranking(?:@\w+)?(?:\s|$)/.test(mensagem.text.trim())
   ) {
     await processarRankingPrivado(mensagem);
+
+    return;
+  }
+
+  const fechamento =
+    mensagem && mensagem.chat?.type === "private" && typeof mensagem.text === "string"
+      ? /^\/(fechar|abrir|fechamentos)(?:@\w+)?(?:\s+(.*))?$/.exec(mensagem.text.trim())
+      : null;
+
+  if (mensagem && fechamento) {
+    await processarFechamentoPrivado(
+      mensagem,
+      fechamento[1] as "fechar" | "abrir" | "fechamentos",
+      (fechamento[2] ?? "").trim(),
+    );
   }
 }

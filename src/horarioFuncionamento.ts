@@ -2,7 +2,8 @@
  * Horário de funcionamento da Loja Ideal.
  *
  * Toda a configuração fica aqui.
- * Feriados ainda não são considerados.
+ * Feriados e folgas: fechamento manual pelo Telegram (/fechar),
+ * dia inteiro em America/Belem (DIAS FECHADOS abaixo).
  */
 
 type Expediente = {
@@ -110,6 +111,48 @@ function momentoLocal(instante: number): MomentoLocal {
   };
 }
 
+/*
+ * Dias fechados manualmente ("AAAA-MM-DD", dia de Belém). A memória é
+ * a fonte de verdade; o banco (tabela fechamentos) só a recarrega na
+ * partida. Cada fechamento vale o dia inteiro e acaba sozinho à
+ * meia-noite (a data muda).
+ */
+const diasFechados = new Set<string>();
+
+export function definirDiasFechados(datas: Iterable<string>): void {
+  diasFechados.clear();
+
+  for (const data of datas) {
+    diasFechados.add(data);
+  }
+}
+
+export function adicionarDiaFechado(data: string): boolean {
+  const novo = !diasFechados.has(data);
+
+  diasFechados.add(data);
+
+  return novo;
+}
+
+export function removerDiaFechado(data: string): boolean {
+  return diasFechados.delete(data);
+}
+
+/**
+ * Dias fechados de "desde" (AAAA-MM-DD) em diante, em ordem.
+ */
+export function listarDiasFechados(desde: string): string[] {
+  return [...diasFechados].filter((data) => data >= desde).sort();
+}
+
+/**
+ * Data ("AAAA-MM-DD") do instante no fuso da loja.
+ */
+export function dataLocal(instante = Date.now()): string {
+  return momentoLocal(instante).data;
+}
+
 function paraMinutos(horario: string): number {
   const [hora, minuto] = horario.split(":");
 
@@ -124,7 +167,7 @@ export function lojaAberta(instante = Date.now()): boolean {
 
   const expediente = EXPEDIENTE_LOJA[local.diaSemana];
 
-  if (!expediente) {
+  if (!expediente || diasFechados.has(local.data)) {
     return false;
   }
 
@@ -146,14 +189,18 @@ export function chavePeriodoFechado(instante = Date.now()): string {
 
   const expedienteHoje = EXPEDIENTE_LOJA[hoje.diaSemana];
 
-  if (expedienteHoje && hoje.minutos < paraMinutos(expedienteHoje.abre)) {
+  if (expedienteHoje && !diasFechados.has(hoje.data) && hoje.minutos < paraMinutos(expedienteHoje.abre)) {
     return hoje.data;
   }
 
-  for (let dias = 1; dias <= 7; dias++) {
+  /*
+   * Próximo dia com expediente que não esteja fechado manualmente
+   * (vários fechamentos seguidos são um período só).
+   */
+  for (let dias = 1; dias <= 400; dias++) {
     const dia = momentoLocal(instante + dias * 24 * 60 * 60 * 1000);
 
-    if (EXPEDIENTE_LOJA[dia.diaSemana]) {
+    if (EXPEDIENTE_LOJA[dia.diaSemana] && !diasFechados.has(dia.data)) {
       return dia.data;
     }
   }

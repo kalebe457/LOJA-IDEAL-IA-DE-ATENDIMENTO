@@ -170,6 +170,13 @@ ok(tudo().includes(`DM de ${codDm} NÃO enviada`), "DM recusada pelo Telegram co
 // 4. /ranking com sucesso e negado; /start com falha de rede (mensagem com canário).
 await privado(ADMIN, "/ranking");
 await privado(MEMBRO, "/ranking");
+// Fechamento manual da loja: admin (nome-canário) fecha, lista e reabre; membro é negado.
+await privado(ADMIN, "/fechar 25/12");
+await privado(ADMIN, "/fechamentos");
+await privado(ADMIN, "/abrir 25/12");
+await privado(MEMBRO, "/fechar 26/12");
+ok(tudo().includes("[Loja] fechamento manual em 25/12 por admin 9900****0778") && tudo().includes("[Loja] fechamento de 25/12 removido por admin 9900****0778") &&
+   tudo().includes("[Loja] /fechamentos respondido (1)") && tudo().includes("[Telegram] /fechar negado"), "/fechar, /fechamentos, /abrir e /fechar negado");
 statusPorUsuario.set(REDE.id, "REDE");
 await privado(REDE, "/start");
 ok(tudo().includes("[Telegram] /ranking respondido") && tudo().includes("[Telegram] /ranking negado") && tudo().includes("getChatMember falhou | rede: ECONNRESET"),

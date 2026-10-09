@@ -14,6 +14,8 @@ import { descreverErro, mascararChatId, valorSeguro, wamidSeguro } from "./logSe
 
 import { agendarRetencao } from "./retencao.js";
 
+import { lerFechamentos } from "./persistenciaFechamentos.js";
+
 import {
   motivoDaFalhaEnvio,
   registrarEnvioAceito,
@@ -46,6 +48,8 @@ import {
   AVISO_ENCAMINHAMENTO_FORA_DO_HORARIO,
   MENSAGEM_LOJA_FECHADA,
   chavePeriodoFechado,
+  dataLocal,
+  definirDiasFechados,
   lojaAberta,
 } from "./horarioFuncionamento.js";
 
@@ -1265,6 +1269,18 @@ export type ResultadoRecuperacao =
  * Exportada também para os testes simularem um reinício.
  */
 export async function recuperarNaPartida(): Promise<ResultadoRecuperacao> {
+  /*
+   * Fechamentos manuais da loja (/fechar) de hoje em diante. Banco
+   * fora: sobe sem fechamentos (aviso em destaque em lerFechamentos).
+   */
+  const fechamentos = await lerFechamentos(dataLocal());
+
+  definirDiasFechados(fechamentos ?? []);
+
+  if (fechamentos !== null) {
+    console.log(`[Loja] fechamentos manuais carregados: ${fechamentos.length}`);
+  }
+
   const phoneNumberId = (process.env.META_PHONE_NUMBER_ID ?? "").trim();
 
   if (!/^\d+$/.test(phoneNumberId)) {
@@ -1389,6 +1405,8 @@ export function redefinirEstadoWebhookParaTestes(): void {
   conversationQueues.clear();
 
   avisosLojaFechada.clear();
+
+  definirDiasFechados([]);
 
   redefinirEstadoTelegramParaTestes();
 

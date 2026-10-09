@@ -20,10 +20,14 @@ vendedores no Telegram → vendedor assume e continua a venda pelo WhatsApp dele
   OUTRO vendedor, ele vence; falha de banco não impede) → memória → DM → edição do grupo.
 - **`/ranking`** (só no privado, só administrator/creator do grupo): assumidos por vendedor no
   mês (America/Belem) e no total. Não está no menu do bot (setMyCommands não registrado).
+- **`/fechar [DD/MM]`, `/abrir [DD/MM]`, `/fechamentos`** (mesma regra do `/ranking`): fechamento
+  manual do dia inteiro (Belém; sem data = hoje; data já passada no ano = próximo ano). Entra em
+  `lojaAberta()`: o cliente recebe o aviso de loja fechada, sem atendimento; conversa em andamento
+  continua, como no fim do horário. Memória + tabela `fechamentos` (sql/004), recarregada na partida.
 - **PostgreSQL `loja_ideal`:** deduplicação de `messages[]` em `eventos_processados` (falha → 503)
   e espelho de cliente/atendimento (`persistenciaAtendimento.ts`). A **memória é a fonte de
   verdade**; o banco segue pelo `codigo` (`ATD-` + 10 hex). Falha no espelho só gera log.
-- Migrations em `sql/` (001, 002 aplicadas no loja_ideal; 003 só com autorização). Nunca editar migration aplicada; mudança = nova.
+- Migrations em `sql/` (001, 002 aplicadas no loja_ideal; 003 e 004 só com autorização). Nunca editar migration aplicada; mudança = nova.
 
 ## Partida (Passo 5d)
 
