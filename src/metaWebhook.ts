@@ -1,5 +1,7 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
+import { mascararPhoneNumberId, valorSeguro, wamidSeguro } from "./logSeguro.js";
+
 import type { EventoMensagem } from "./webhook.js";
 
 /*
@@ -237,19 +239,17 @@ export function verificarAssinaturaMeta(
 function registrarStatus(status: MetaStatus, phoneNumberId: string): void {
   const partes = [
     "Status Meta recebido.",
-    `status: ${status.status ?? "desconhecido"}`,
-    `wamid: ${status.id ?? "não informado"}`,
-    `phone_number_id: ${phoneNumberId}`,
+    `status: ${valorSeguro(status.status)}`,
+    `wamid: ${wamidSeguro(status.id)}`,
+    `phone_number_id: ${mascararPhoneNumberId(phoneNumberId)}`,
   ];
 
   for (const erro of status.errors ?? []) {
     partes.push(`erro code: ${erro.code ?? "não informado"}`);
 
-    partes.push(`erro title: ${erro.title ?? "não informado"}`);
-
     /*
-     * error_data.details não é registrado:
-     * pode conter dados pessoais.
+     * title e error_data.details não são registrados: são texto
+     * vindo do corpo da notificação e podem conter dados pessoais.
      */
   }
 
@@ -270,7 +270,7 @@ function registrarStatus(status: MetaStatus, phoneNumberId: string): void {
 export function processarPayloadMeta(payload: MetaWebhookPayload): void {
   if (payload.object !== "whatsapp_business_account") {
     console.log(
-      `Payload Meta ignorado: object = ${payload.object ?? "não informado"}`,
+      `Payload Meta ignorado: object = ${valorSeguro(payload.object)}`,
     );
 
     return;
@@ -282,7 +282,7 @@ export function processarPayloadMeta(payload: MetaWebhookPayload): void {
 
       if (mudanca.field !== "messages" || !value) {
         console.log(
-          `Mudança Meta ignorada: field = ${mudanca.field ?? "não informado"}`,
+          `Mudança Meta ignorada: field = ${valorSeguro(mudanca.field)}`,
         );
 
         continue;
@@ -294,9 +294,9 @@ export function processarPayloadMeta(payload: MetaWebhookPayload): void {
         console.log(
           [
             "Mensagem Meta recebida.",
-            `type: ${mensagem.type ?? "desconhecido"}`,
-            `wamid: ${mensagem.id ?? "não informado"}`,
-            `phone_number_id: ${phoneNumberId}`,
+            `type: ${valorSeguro(mensagem.type)}`,
+            `wamid: ${wamidSeguro(mensagem.id)}`,
+            `phone_number_id: ${mascararPhoneNumberId(phoneNumberId)}`,
           ].join(" | "),
         );
       }

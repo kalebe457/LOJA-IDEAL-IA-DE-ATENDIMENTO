@@ -41,6 +41,10 @@ o processo morreu se perde (o texto não é guardado e a reentrega da Meta vira 
   senhas ou connection strings. Para conferir, mostrar só nomes ou tamanhos.
 - Nenhuma credencial, ID real (grupo, app, número, usuário) ou dado de cliente em código,
   testes, logs ou commits. Logs mascaram telefone (`5591****1234`).
+- **Log diz o que o sistema fez, nunca o que o cliente disse** (`src/logSeguro.ts`): sem texto de
+  mensagem, nomes, campos do resumo, corpo de requisição/resposta ou `erro.message` de biblioteca
+  (use `descreverErro`); telefone, chat_id, user_id e phone_number_id só mascarados. Garantido por
+  `tests/logs-sem-dados-pessoais.test.mts` (canários).
 - Não chamar APIs reais (Meta, Telegram, Anthropic) para testar; ações reais só com pedido.
 
 ## Regra crítica: ordem do lote da Meta

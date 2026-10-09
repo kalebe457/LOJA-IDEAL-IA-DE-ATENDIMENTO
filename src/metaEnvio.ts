@@ -1,5 +1,12 @@
 import { lerChatIdMeta } from "./metaWebhook.js";
 
+import { mascararTelefone, valorSeguro } from "./logSeguro.js";
+
+/*
+ * Reexportado: outros módulos já importam a máscara daqui.
+ */
+export { mascararTelefone };
+
 /*
  * Envio de mensagens de texto pela WhatsApp Cloud API.
  *
@@ -220,20 +227,6 @@ export function obterChatIdPorWamid(wamid: string): string | null {
 }
 
 /**
- * Mascara um telefone para logs.
- *
- * Sempre 4 asteriscos, para não revelar o tamanho:
- * 559198274361 -> 5591****4361
- */
-export function mascararTelefone(telefone: string): string {
-  if (telefone.length <= 8) {
-    return "****" + telefone.slice(-2);
-  }
-
-  return telefone.slice(0, 4) + "****" + telefone.slice(-4);
-}
-
-/**
  * Descreve o destino de um chatId Meta
  * sem expor o telefone completo.
  */
@@ -352,6 +345,13 @@ type ErroGraph = {
 
   fbtrace_id?: string;
 };
+
+/**
+ * Número vindo do corpo de erro, só se for número mesmo.
+ */
+function numeroSeguro(valor: unknown): string {
+  return typeof valor === "number" && Number.isFinite(valor) ? String(valor) : "-";
+}
 
 /**
  * Explicação curta para códigos conhecidos.
@@ -508,10 +508,11 @@ async function tentarEnvio(
     [
       rotulo,
       `HTTP ${resposta.status}`,
-      `code: ${erroGraph.code ?? "-"}`,
-      `subcode: ${erroGraph.error_subcode ?? "-"}`,
-      `type: ${erroGraph.type ?? "-"}`,
-      `fbtrace_id: ${erroGraph.fbtrace_id ?? "-"}`,
+      // Só campos técnicos e saneados: o corpo de erro da Graph pode ecoar o texto enviado.
+      `code: ${numeroSeguro(erroGraph.code)}`,
+      `subcode: ${numeroSeguro(erroGraph.error_subcode)}`,
+      `type: ${valorSeguro(erroGraph.type)}`,
+      `fbtrace_id: ${valorSeguro(erroGraph.fbtrace_id)}`,
       ...(descricao ? [descricao] : []),
       `classe: ${classe}`,
     ].join(" | "),

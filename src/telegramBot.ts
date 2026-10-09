@@ -5,7 +5,7 @@ import {
   ResultadoAssumir,
 } from "./atendimentoVendedor.js";
 
-import { mascararTelefone } from "./metaEnvio.js";
+import { descreverErro, mascararIdTelegram, mascararTelefone } from "./logSeguro.js";
 
 import {
   consultarRanking,
@@ -414,16 +414,14 @@ async function chamarTelegram<T>(
 
     if (!json.ok) {
       console.error(
-        `[Telegram] ${metodo} falhou | código: ${json.error_code ?? resposta.status} | ${json.description ?? "sem descrição"}`,
+        // Sem a description: texto da API, pode ecoar o que foi enviado.
+        `[Telegram] ${metodo} falhou | código: ${typeof json.error_code === "number" ? json.error_code : resposta.status}`,
       );
     }
 
     return json;
   } catch (erro: unknown) {
-    const mensagem =
-      erro instanceof Error
-        ? erro.message.split(token).join("<token>")
-        : "erro desconhecido";
+    const mensagem = descreverErro(erro);
 
     console.error(`[Telegram] ${metodo} falhou | rede: ${mensagem}`);
 
@@ -805,7 +803,7 @@ async function participaDoGrupoVendedores(usuarioId: number): Promise<Participac
 
   if (status === null) {
     console.log(
-      `[Telegram] participação no grupo não verificada (user_id ${usuarioId}): falha técnica; acesso negado.`,
+      `[Telegram] participação no grupo não verificada (user_id ${mascararIdTelegram(usuarioId)}): falha técnica; acesso negado.`,
     );
 
     return "erro";
@@ -813,14 +811,14 @@ async function participaDoGrupoVendedores(usuarioId: number): Promise<Participac
 
   if (STATUS_AUTORIZADOS.has(status)) {
     console.log(
-      `[Telegram] participação no grupo confirmada (user_id ${usuarioId}, status: ${status}).`,
+      `[Telegram] participação no grupo confirmada (user_id ${mascararIdTelegram(usuarioId)}, status: ${status}).`,
     );
 
     return "autorizado";
   }
 
   console.log(
-    `[Telegram] user_id ${usuarioId} fora da equipe de vendedores (status no grupo: ${status}); acesso negado.`,
+    `[Telegram] user_id ${mascararIdTelegram(usuarioId)} fora da equipe de vendedores (status no grupo: ${status}); acesso negado.`,
   );
 
   return "fora_da_equipe";
@@ -872,7 +870,7 @@ async function processarStartPrivado(mensagem: TelegramMensagem): Promise<void> 
 
   vendedores.set(userId, vendedor);
 
-  console.log(`[Telegram] vendedor registrado pelo /start (user_id ${userId}).`);
+  console.log(`[Telegram] vendedor registrado pelo /start (user_id ${mascararIdTelegram(userId)}).`);
 
   /*
    * Também no banco: depois de um reinício o vendedor volta sem
@@ -1043,7 +1041,7 @@ async function processarCallback(callback: TelegramCallbackQuery): Promise<void>
       } catch (erro: unknown) {
         console.error(
           `[Telegram] falha ao marcar ${atendimentoId} como HUMANO:`,
-          erro instanceof Error ? erro.message : "erro desconhecido",
+          descreverErro(erro),
         );
       }
 
@@ -1154,7 +1152,7 @@ async function processarRankingPrivado(mensagem: TelegramMensagem): Promise<void
   }
 
   if (!STATUS_ADMINISTRADORES.has(status)) {
-    console.log(`[Telegram] /ranking negado (user_id ${usuario.id}, status: ${status}).`);
+    console.log(`[Telegram] /ranking negado (user_id ${mascararIdTelegram(usuario.id)}, status: ${status}).`);
 
     await responder(MENSAGEM_RANKING_SO_ADMIN);
 

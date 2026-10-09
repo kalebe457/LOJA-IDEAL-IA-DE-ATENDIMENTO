@@ -74,7 +74,9 @@ for (const st of ["restricted", "left", "kicked", "status_novo_qualquer"]) {
   await start(20);
   ok(ultimaPara(20) === FORA && !registrou(20), `"${st}" → mensagem exata de não pertencimento, sem registro`);
 }
-ok(logs.some((l) => l.includes("user_id 20") && l.includes("status_novo_qualquer")) && !logs.some((l) => l.includes("TOKEN-FALSO")), "log com user_id e status; sem token");
+// user_id só mascarado no log (logs sem dados pessoais).
+ok(logs.some((l) => l.includes("user_id ****20") && l.includes("status_novo_qualquer")) && !logs.some((l) => l.includes("user_id 20")) && !logs.some((l) => l.includes("TOKEN-FALSO")),
+  "log com user_id mascarado e status; sem token");
 
 logReal("\n== /start: erro técnico (API, rede, resposta inesperada) ==");
 for (const st of ["ERRO", "REDE", "INESPERADO"]) {

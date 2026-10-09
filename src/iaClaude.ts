@@ -6,6 +6,8 @@ import { jsonSchemaOutputFormat } from "@anthropic-ai/sdk/helpers/json-schema";
 
 import type { IA } from "./ia.js";
 
+import { valorSeguro } from "./logSeguro.js";
+
 import type {
   Cliente,
   EstadoTriagem,
@@ -1044,7 +1046,7 @@ export class IAClaude implements IA {
       [
         "[Claude] uso",
         `atendimento: ${this.atendimentoId}`,
-        `modelo: ${resposta.model}`,
+        `modelo: ${valorSeguro(resposta.model)}`,
         `input_tokens: ${uso.input_tokens}`,
         `output_tokens: ${uso.output_tokens}`,
         `cache_creation_input_tokens: ${uso.cache_creation_input_tokens ?? "-"}`,

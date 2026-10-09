@@ -10,6 +10,8 @@ import {
 
 import { IAClaude } from "./iaClaude.js";
 
+import { descreverErro, mascararChatId, valorSeguro, wamidSeguro } from "./logSeguro.js";
+
 import type { IA } from "./ia.js";
 
 import {
@@ -268,43 +270,6 @@ function normalizarTelefone(telefone?: string): string {
   }
 
   return telefone.replace(/\D/g, "");
-}
-
-/**
- * Mascara telefones dentro de um chatId para logs.
- *
- * meta:<id>:559198274361 -> meta:<id>:5591****4361
- */
-function mascararChatId(chatId: string): string {
-  return chatId.replace(/\d{8,}/g, (digitos) => mascararTelefone(digitos));
-}
-
-/**
- * Descreve um erro da IA somente com dados técnicos.
- *
- * Erros da API da Anthropic: HTTP status, tipo e request_id.
- * Demais erros: nome e mensagem limitada.
- */
-function descreverErroIA(erro: unknown): string {
-  if (!(erro instanceof Error)) {
-    return "erro desconhecido";
-  }
-
-  const api = erro as Error & {
-    status?: unknown;
-    requestID?: unknown;
-    error?: { error?: { type?: unknown } };
-  };
-
-  if (typeof api.status === "number") {
-    return [
-      `HTTP ${api.status}`,
-      `type: ${String(api.error?.error?.type ?? "-")}`,
-      `request_id: ${String(api.requestID ?? "-")}`,
-    ].join(" | ");
-  }
-
-  return `${erro.name}: ${erro.message.slice(0, 120)}`;
 }
 
 /**
@@ -806,7 +771,7 @@ async function processarMensagemRecebida(payload: EventoMensagem): Promise<void>
         resultado = await conversa.ia.responder(texto, conversa.cliente);
       } catch (erro: unknown) {
         console.error(
-          `Falha na IA (${conversa.atendimentoId}): ${descreverErroIA(erro)}`,
+          `Falha na IA (${conversa.atendimentoId}): ${descreverErro(erro)}`,
         );
 
         const observacoes = conversa.cliente.resumo.observacoes;
@@ -983,7 +948,7 @@ function adicionarNaFila(chatId: string, tarefa: () => Promise<void>): void {
     .catch((erro: unknown) => {
       console.error(
         "Erro ao processar mensagem:",
-        erro instanceof Error ? erro.message : "erro desconhecido",
+        descreverErro(erro),
       );
     });
 
@@ -1031,13 +996,13 @@ function verificarInatividade(): void {
 function tratarStatusMeta(status: MetaStatus): void {
   const wamid = status.id ?? "";
 
-  const situacao = status.status ?? "desconhecido";
+  const situacao = valorSeguro(status.status);
 
   const chatId = wamid ? obterChatIdPorWamid(wamid) : null;
 
   if (!chatId) {
     console.log(
-      `[Meta] status ${situacao} para wamid sem correspondência (envio anterior, expirado ou de outra origem): ${wamid || "não informado"}`,
+      `[Meta] status ${situacao} para wamid sem correspondência (envio anterior, expirado ou de outra origem): ${wamid ? wamidSeguro(wamid) : "não informado"}`,
     );
 
     return;
@@ -1049,7 +1014,7 @@ function tratarStatusMeta(status: MetaStatus): void {
     `[Meta] status ${situacao} associado`,
     `atendimento: ${conversa ? conversa.atendimentoId : "já encerrado"}`,
     `destino: ${descreverDestinoMeta(chatId)}`,
-    `wamid: ${wamid}`,
+    `wamid: ${wamidSeguro(wamid)}`,
   ];
 
   if (situacao !== "failed") {
@@ -1061,7 +1026,6 @@ function tratarStatusMeta(status: MetaStatus): void {
   for (const erro of status.errors ?? []) {
     partes.push(`erro code: ${erro.code ?? "não informado"}`);
 
-    partes.push(`erro title: ${erro.title ?? "não informado"}`);
   }
 
   partes.push("sem reenvio automático");
@@ -1161,16 +1125,6 @@ async function processarEvento(payload: EventoMensagem): Promise<void> {
  * memória vazia (nunca deixa de subir por causa do banco).
  */
 const LIMITE_RECUPERACAO_MS = 30_000;
-
-function descreverErroCurto(erro: unknown): string {
-  const codigo = (erro as { code?: unknown } | null)?.code;
-
-  if (typeof codigo === "string") {
-    return codigo;
-  }
-
-  return erro instanceof Error ? erro.name : "erro desconhecido";
-}
 
 /**
  * Monta a conversa em memória a partir do banco.
@@ -1282,7 +1236,7 @@ export async function recuperarNaPartida(): Promise<ResultadoRecuperacao> {
     dados = resultado;
   } catch (erro: unknown) {
     console.error(
-      `[Recuperação] ATENÇÃO: banco indisponível na partida (${descreverErroCurto(erro)}); subindo com a memória vazia.`,
+      `[Recuperação] ATENÇÃO: banco indisponível na partida (${descreverErro(erro)}); subindo com a memória vazia.`,
     );
 
     return { ok: false };
@@ -1424,7 +1378,7 @@ export async function iniciarWebhook(): Promise<void> {
         processarUpdateTelegram(update).catch((erro: unknown) => {
           console.error(
             "Erro ao processar update do Telegram:",
-            erro instanceof Error ? erro.message : "erro desconhecido",
+            descreverErro(erro),
           );
         });
 
@@ -1517,7 +1471,7 @@ export async function iniciarWebhook(): Promise<void> {
             } catch (erro: unknown) {
               console.error(
                 "Erro ao tratar status da Meta:",
-                erro instanceof Error ? erro.message : "erro desconhecido",
+                descreverErro(erro),
               );
             }
           }
@@ -1538,7 +1492,7 @@ export async function iniciarWebhook(): Promise<void> {
             processarEvento(evento).catch((erro: unknown) => {
               console.error(
                 "Erro ao processar mensagem da Meta:",
-                erro instanceof Error ? erro.message : "erro desconhecido",
+                descreverErro(erro),
               );
             });
           }
@@ -1562,7 +1516,7 @@ export async function iniciarWebhook(): Promise<void> {
 
       console.error(
         "Erro interno no webhook:",
-        erro instanceof Error ? erro.message : "erro desconhecido",
+        descreverErro(erro),
       );
     }
   });
@@ -1601,7 +1555,7 @@ export async function iniciarWebhook(): Promise<void> {
         console.log(`[Recuperação] pendências reenviadas | resumos publicados: ${resumos} | DMs reenviadas: ${dms}`);
       })
       .catch((erro: unknown) => {
-        console.error(`[Recuperação] falha ao reenviar pendências (${descreverErroCurto(erro)}).`);
+        console.error(`[Recuperação] falha ao reenviar pendências (${descreverErro(erro)}).`);
       });
   }
 
@@ -1615,7 +1569,7 @@ export async function iniciarWebhook(): Promise<void> {
     reenviarResumosTelegramPendentes().catch((erro: unknown) => {
       console.error(
         "Erro ao reenviar resumos do Telegram:",
-        erro instanceof Error ? erro.message : "erro desconhecido",
+        descreverErro(erro),
       );
     });
   }, 60_000);

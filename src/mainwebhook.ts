@@ -1,5 +1,7 @@
 import "dotenv/config";
 
+import { descreverErro } from "./logSeguro.js";
+
 import { iniciarWebhook } from "./webhook.js";
 
 /*
@@ -9,7 +11,7 @@ import { iniciarWebhook } from "./webhook.js";
 iniciarWebhook().catch((erro: unknown) => {
   console.error(
     "Falha ao iniciar o backend:",
-    erro instanceof Error ? erro.message : "erro desconhecido",
+    descreverErro(erro),
   );
 
   process.exit(1);

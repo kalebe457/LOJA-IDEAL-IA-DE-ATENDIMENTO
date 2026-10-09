@@ -1,5 +1,7 @@
 import { obterConexao } from "./banco.js";
 
+import { descreverErro } from "./logSeguro.js";
+
 /*
  * Assunção pelo Telegram no PostgreSQL (Passo 5c).
  *
@@ -15,16 +17,6 @@ import { obterConexao } from "./banco.js";
 const STATEMENT_TIMEOUT = "5s";
 
 type Conexao = Awaited<ReturnType<typeof obterConexao>>;
-
-function descreverErro(erro: unknown): string {
-  const codigo = (erro as { code?: unknown } | null)?.code;
-
-  if (typeof codigo === "string") {
-    return codigo;
-  }
-
-  return erro instanceof Error ? erro.name : "erro desconhecido";
-}
 
 /**
  * Executa fn numa transação curta. Erro: ROLLBACK, log e

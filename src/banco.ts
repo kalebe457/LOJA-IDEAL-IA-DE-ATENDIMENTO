@@ -2,6 +2,8 @@ import "dotenv/config";
 
 import pg from "pg";
 
+import { descreverErro } from "./logSeguro.js";
+
 /*
  * Conexão com o PostgreSQL do sistema (banco loja_ideal).
  *
@@ -55,28 +57,6 @@ function lerConfigBanco(): ConfigBanco {
 }
 
 /**
- * Descreve um erro do PostgreSQL só com dados técnicos
- * (código e mensagem), sem credenciais.
- */
-function descreverErroBanco(erro: unknown): string {
-  if (!(erro instanceof Error)) {
-    return "erro desconhecido";
-  }
-
-  const codigo = (erro as Error & { code?: unknown }).code;
-
-  let mensagem = erro.message.slice(0, 200);
-
-  const senha = process.env.DB_PASSWORD ?? "";
-
-  if (senha) {
-    mensagem = mensagem.split(senha).join("<oculto>");
-  }
-
-  return `${typeof codigo === "string" ? codigo : erro.name}: ${mensagem}`;
-}
-
-/**
  * Pool único do processo, criado no primeiro uso.
  */
 export function obterPool(): pg.Pool {
@@ -102,7 +82,7 @@ export function obterPool(): pg.Pool {
    * O Pool descarta o cliente e abre outro no próximo uso.
    */
   pool.on("error", (erro) => {
-    console.error(`[Banco] erro em conexão ociosa do pool: ${descreverErroBanco(erro)}`);
+    console.error(`[Banco] erro em conexão ociosa do pool: ${descreverErro(erro)}`);
   });
 
   return pool;
